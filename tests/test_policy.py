@@ -207,7 +207,7 @@ def make_onnx_export(d):
                                     h.make_tensor_value_info("images.top", T.FLOAT, [1, 3, *RES]),
                                     h.make_tensor_value_info("images.wrist", T.FLOAT, [1, 3, *RES])],
                      [h.make_tensor_value_info("action", T.FLOAT, [1, CH, 6]), h.make_tensor_value_info("w_unused", T.FLOAT, None)], init)
-    onnx.save(h.make_model(g, opset_imports=[h.make_opsetid("", 13)]), str(d / "act.onnx"))
+    onnx.save(h.make_model(g, opset_imports=[h.make_opsetid("", 13)], ir_version=8), str(d / "act.onnx"))
     (d / "manifest.json").write_text(json.dumps(studio_manifest("onnx", "act.onnx"), indent=2))
     return d
 
@@ -290,6 +290,22 @@ def test_stall_handoff_then_wp1(tmp_path):
     assert g_lock < A.width - collect.HOLD_GAP and len(fp.calls) > 3                # squeezing past the object
     assert at[0]["t_s"] < 10 and at[0]["hz"] and abs(at[0]["hz"] - pol.FPS) < 1      # ran at the dataset rate
     for k in ("infer_ms_p50", "infer_ms_p95", "obs_ms_p50", "obs_ms_p95"): assert info[k] is not None and info[k] >= 0
+
+
+def test_light_squeeze_still_hands_off(tmp_path):
+    """A policy that closes only 30 ticks past the object's width never satisfies the demos' stall rule (40 ticks):
+    the soft rule hands off after SOFT_HOLD_S and the clamp is firmed up before the lift."""
+    class Weak(FakePolicy):
+        def chunk(self, obs):
+            out = super().chunk(obs)
+            weak = export_act.normalize(np.array([[2048] * 5 + [2000 - 30]], float), LIM)[0][5]
+            out[:, 5] = np.where(out[:, 5] == 0.0, weak, out[:, 5]); return out
+    ap, A, C = act_pick(Weak(), tmp=tmp_path, max_s=10, retries=0)
+    g_lock, info = ap.run()
+    at = info["attempts"][0]
+    assert at["result"] == "grasp_soft" and at["held_at_wp1"] and A.held and C.holding()
+    assert g_lock <= A.width - collect.REGRIP_SQUEEZE                               # firmed up
+    assert pol.SOFT_HOLD_S > collect.HOLD_TIME                                      # the strict rule gets its chance first
 
 
 def test_timeout_retry_clean_failure(tmp_path):

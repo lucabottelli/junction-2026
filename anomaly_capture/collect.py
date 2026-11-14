@@ -49,15 +49,16 @@ class GraspDetector:
     """The automatic hand-off rule of episode() (and sorter.pick_teleop), as a reusable object for policy.py:
     the gripper is commanded HOLD_GAP ticks more closed than it actually is, has not moved more than HOLD_STILL
     over 0.25 s and is not fully shut (HOLD_MIN_OPEN above the closed end), continuously for HOLD_TIME.
-    update(now, actual gripper, commanded gripper target) -> True once the fingers have stalled on an object."""
-    def __init__(self, gmin):
-        self.gmin, self.gq, self.since = gmin, [], None
+    update(now, actual gripper, commanded gripper target) -> True once the fingers have stalled on an object.
+    gap / hold can be relaxed for a second, slower detector (policy.py: a policy may squeeze less than a human)."""
+    def __init__(self, gmin, gap=HOLD_GAP, hold=HOLD_TIME):
+        self.gmin, self.gap, self.hold, self.gq, self.since = gmin, gap, hold, [], None
 
     def update(self, now, g, c):
         self.gq = [(t, v) for t, v in self.gq if now - t < 0.25] + [(now, g)]
         still = max(v for _, v in self.gq) - min(v for _, v in self.gq) <= HOLD_STILL and now - self.gq[0][0] > 0.2
-        self.since = (self.since or now) if (c < g - HOLD_GAP and still and g - self.gmin > HOLD_MIN_OPEN) else None
-        return bool(self.since and now - self.since >= HOLD_TIME)
+        self.since = (self.since or now) if (c < g - self.gap and still and g - self.gmin > HOLD_MIN_OPEN) else None
+        return bool(self.since and now - self.since >= self.hold)
 
 
 class Collector:

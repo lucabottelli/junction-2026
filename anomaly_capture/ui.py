@@ -63,8 +63,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px}
  <div id=banner>loading…</div>
  <span class=small>arm: <b id=mode>-</b></span>
 </div>
-<nav><a href="#setup">1 Setup</a><a href="#teach">2 Teach</a><a href="#views">3 Views</a><a href="#collect">4 Phase 1+2</a><a href="#episodes">5 Episodes</a>
-<a href="#export">6 Train ACT</a><a href="#anomaly">7 Anomaly data</a><a class=fut href="#p3">Phase 3</a><a class=fut href="#p4">Phase 4</a><a class=fut href="#p5">Phase 5</a><a class=fut href="#p6">Phase 6</a><a class=fut href="#p7">Phase 7</a></nav>
+<nav><a href="#setup">1 Setup</a><a href="#teach">2 Teach</a><a href="#views">3 Views</a><a href="#collect">4 Teach the pick</a><a href="#episodes">5 Episodes</a>
+<a href="#export">6 Train ACT</a><a href="#anomaly">7 Anomaly data</a><a class=fut href="#vision">ACT + vision</a><a class=fut href="#p3">Phase 3</a><a class=fut href="#p4">Phase 4</a><a class=fut href="#p5">Phase 5</a><a class=fut href="#p6">Phase 6</a><a class=fut href="#p7">Phase 7</a></nav>
 <div id=amsg></div></header>
 <main>
 
@@ -89,17 +89,17 @@ The gripper value stored is what the gripper is <i>commanded</i> to, so a pose s
   <div id=s-home></div><button class=g onclick="p('/arm/wp/add?routine=home&single=true')">save current pose</button></div>
  <div class=card><h3>Waypoint 1 <span class=small>wp1</span></h3><p>Above the orange plate. End of phase 1: the pick model learns to bring the brick here.</p>
   <div id=s-wp1></div><button class=g onclick="p('/arm/wp/add?routine=wp1&single=true')">save current pose</button></div>
- <div class=card><h3>Above waypoint 2 <span class=small>wp2_above</span></h3><p>~5 cm <b>straight above</b> WP2, high enough to clear the yellow plate. WP1 → here → <b>straight down</b> into WP2 (and straight up again when leaving).</p>
+ <div class=card><h3>Above waypoint 2 <span class=small>wp2_above · only for photos</span></h3><p>~5 cm <b>straight above</b> WP2, high enough to clear the yellow plate. WP1 → here → <b>straight down</b> into WP2 (and straight up again when leaving).</p>
   <div id=s-wp2_above></div><button class=g onclick="p('/arm/wp/add?routine=wp2_above&single=true')">save current pose</button></div>
- <div class=card><h3>Waypoint 2 <span class=small>wp2</span></h3><p>Brick in front of the front camera, ≥35 cm from it (depth). Photographed at every pose here. Gripper is locked from WP1 on (clamp unchanged).</p>
+ <div class=card><h3>Waypoint 2 <span class=small>wp2 · only for photos</span></h3><p>Brick in front of the front camera, ≥35 cm from it (depth). Photographed at every pose here. Gripper is locked from WP1 on (clamp unchanged).</p>
   <div id=s-wp2></div><button class=g onclick="p('/arm/wp/add?routine=wp2&capture=true')">+ add photo pose</button>
   <button class=sm onclick="p('/collect/test_wp2')" title="hold a brick first; runs at ≤30% speed, saves nothing">test WP1 → WP2 path</button></div>
- <div class=card><h3>Above tape spot <span class=small>tape_above</span></h3><p>A few cm straight above the <b>orange tape spot</b> (holding the brick). The robot comes down from here to set the brick down, and goes up here again.</p>
+ <div class=card><h3>Above tape spot <span class=small>tape_above · re-grip, experimental</span></h3><p>A few cm straight above the <b>orange tape spot</b> (holding the brick). The robot comes down from here to set the brick down, and goes up here again.</p>
   <div id=s-tape_above></div><button class=g onclick="p('/arm/wp/add?routine=tape_above&single=true')">save current pose</button></div>
- <div class=card><h3>On tape spot <span class=small>tape_place</span></h3><p>Brick (still held) <b>just touching</b> the tape spot. Set down gently here, released, wrist turned 90°, gripped again with the same clamp.</p>
+ <div class=card><h3>On tape spot <span class=small>tape_place · re-grip, experimental</span></h3><p>Brick (still held) <b>just touching</b> the tape spot. Set down gently here, released, wrist turned 90°, gripped again with the same clamp.</p>
   <div id=s-tape_place></div><button class=g onclick="p('/arm/wp/add?routine=tape_place&single=true')">save current pose</button>
   <button class=sm onclick="p('/collect/test_wp2?kind=regrasp')" title="hold a brick first; ≤30% speed, saves nothing">test re-grip</button></div>
- <div class=card><h3>Reset spots <span class=small>drops · optional</span></h3><p>Collection only: 3-5 poses ~3 cm above different spots of the <b>orange plate</b>; after the photos the robot drops the brick at a random one so the next pick starts somewhere new. Without them it leaves the brick on the tape spot and you put it back.</p>
+ <div class=card><h3>Reset spots <span class=small>drops · optional</span></h3><p>3-5 poses ~3 cm above different spots of the <b>orange plate</b>: the robot drops the block at a random one after each episode (new position by itself). Without them it puts the block back where it picked it, turned randomly.</p>
   <div id=s-drops></div><button class=g onclick="p('/arm/wp/add?routine=drops')">+ add reset spot</button></div>
 </div></section>
 
@@ -114,18 +114,18 @@ Drag a box on the full top view to set the table crop (no people in it). Check t
 <div class=wrap style="max-width:760px"><img class=cam id=full-top style="cursor:crosshair"><div class=drag id=dr-full></div></div>
 </section>
 
-<section id=collect><h2><span class=n>4</span>Phase 1 + 2: collect the data <span class="tag now">now</span></h2>
-<p class=lead>One <b>episode</b> = one brick handled once. You only do the pick (with the leader); the robot does everything after that by itself.
-<b>Phase 1</b> (pick + carry to waypoint 1) is recorded to teach the pick model. <b>Phase 2</b> (two front-camera photos, the second with the brick turned 90°) is the training data for the defect detector.</p>
+<section id=collect><h2><span class=n>4</span>Teach the pick: pick a block → waypoint 1 <span class="tag now">now</span></h2>
+<p class=lead>One <b>episode</b> = you pick the block once with the leader; the robot then carries it to <b>waypoint 1</b> by itself and puts it back on the orange plate for the next try.
+Every episode is a recorded demonstration (top + wrist camera images + arm movements) that the <b>ACT pick model</b> learns from. Do <b>many episodes per block</b>, with the block in a different position and orientation each time.</p>
 
 <div class=grid2>
  <div class=card><h3>Before you press START</h3><div id=precheck class=small>…</div></div>
  <div class=card><h3>Settings for this run</h3>
-  <div class=row><span style="width:110px">Brick name</span><input id=brick placeholder="e.g. red" style="width:130px"><span class=small>same name every time for the same brick</span></div>
-  <div class=row><span style="width:110px">Brick type</span><select id=label><option value=good>good (no cross)</option><option value=defect>defect (has a cross)</option></select></div>
-  <div class=row><span style="width:110px">Episodes</span><input id=n type=number value=30 min=1 style="width:80px"><span class=small>it stops by itself after this many good ones</span></div>
+  <div class=row><span style="width:110px">Block</span><input id=brick placeholder="e.g. red" style="width:130px"><span class=small>always the same name for the same block (it names its dataset)</span></div>
+  <div class=row><span style="width:110px">Block type</span><select id=label><option value=good>good (no cross)</option><option value=defect>defect (has a cross)</option></select></div>
+  <div class=row><span style="width:110px">Episodes</span><input id=n type=number value=30 min=1 style="width:80px"><span class=small>stops by itself after this many successful picks</span></div>
   <div class=row><span style="width:110px">Robot speed</span><input id=c-speed type=range min=10 max=100><span id=spv class=small></span><span class=small>start at 30-50%</span></div>
-  <div class=row><span style="width:110px">Reset turn ±</span><input id=c-jit type=number min=0 max=90 style="width:70px"><span class=small>° random wrist turn when it drops the brick back on the orange plate</span></div>
+  <div class=row><span style="width:110px">Put-back turn ±</span><input id=c-jit type=number min=0 max=90 style="width:70px"><span class=small>° random turn when the robot puts the block back (new orientation each time)</span></div>
   <button class="g big" onclick="startCol()">▶ START</button>
  </div>
 </div>
@@ -134,39 +134,40 @@ Drag a box on the full top view to set the table crop (no people in it). Check t
 <table>
  <tr><th style="width:24%">Banner</th><th style="width:38%">You do</th><th>The robot does</th></tr>
  <tr><td><b style="color:#ffd23f">START POSE</b></td><td>Nothing.</td><td>Goes to the start pose, gripper open.</td></tr>
- <tr><td><b style="color:#ffb44d">MATCH THE LEADER</b></td><td>Move the leader arm into the same pose as the robot until every joint shows <b class=ok>green</b> (≤8°) below the keys.<br><b>Your pause:</b> place or throw the brick on the orange plate now, every time a bit different (rotated, on its side, upside down, near the edge).</td><td>Waits. Starts copying the leader as soon as everything matches.</td></tr>
- <tr><td><b style="color:#ff5252">PHASE 1 ● REC: PICK</b></td><td>Pick the brick with the leader: <b>one smooth, direct grasp</b>. Close the gripper firmly and <b>keep squeezing</b>.</td><td>Copies you and records. Notices by itself when the gripper is closed on the brick.</td></tr>
- <tr><td><b style="color:#ff5252">PHASE 1 ● REC: ROBOT → WP1</b></td><td><b>Let go of the leader</b>, hands off.</td><td>Lifts straight up and carries the brick to waypoint 1 (still recording). From here the clamp never changes.</td></tr>
- <tr><td><b style="color:#5fd38d">PHASE 2: WP2 FRONT CAMERA</b></td><td>Nothing. Keep people's hands out of the front camera's view.</td><td>Above waypoint 2 → straight down → <b>photo 1</b> → straight up.</td></tr>
- <tr><td><b style="color:#5fd38d">PHASE 2: TAPE SPOT, RE-GRIP</b></td><td>Nothing.</td><td>Sets the brick down gently on the tape spot, turns the wrist 90°, grips it again (same clamp), then straight down into waypoint 2 → <b>photo 2</b> (turned brick) → up.</td></tr>
- <tr><td><b style="color:#8ab4f8">RESET</b></td><td>If no reset spots are taught: the brick is left on the tape spot, put it back on the orange plate during the next MATCH.</td><td>Drops the brick at a random reset spot on the orange plate (if taught), goes to the start pose: next episode.</td></tr>
+ <tr><td><b style="color:#ffb44d">MATCH THE LEADER</b></td><td>Move the leader arm into the robot's pose until every joint shows <b class=ok>green</b> (≤8°, shown below the keys).<br><b>Your pause:</b> move / turn / throw the block on the orange plate now so every pick starts differently.</td><td>Waits; starts copying the leader as soon as everything matches.</td></tr>
+ <tr><td><b style="color:#ff5252">● REC: PICK</b></td><td>Pick the block with the leader: <b>one smooth, direct grasp</b>, close firmly and <b>keep squeezing</b>.</td><td>Copies you and records. Notices by itself when the gripper is closed on the block.</td></tr>
+ <tr><td><b style="color:#ff5252">● REC: ROBOT → WP1</b></td><td><b>Let go of the leader</b>, hands off.</td><td>Lifts straight up and carries the block to waypoint 1 (still recording; clamp unchanged). Episode saved.</td></tr>
+ <tr><td><b style="color:#8ab4f8">RESET</b></td><td>Nothing (or adjust the block during the next MATCH).</td><td>Puts the block back <b>where it picked it</b>, turned by a random angle, gently, and lets go (or drops it at a random reset spot, if you taught some). Back to the start pose → next episode.</td></tr>
 </table></div>
 
 <div class=card style="margin-top:12px"><h3>Keys (only when needed)</h3>
-<div class=row>
- <button class=g onclick="p('/collect/flag/grasped')"><span class=kbd>G</span> grasped: take over</button><span class=small>you hold the brick but the robot didn't notice</span></div>
-<div class=row>
- <button class=d onclick="p('/collect/flag/discard')"><span class=kbd>X</span> discard this pick</button><span class=small>fumbled, knocked the brick over, wrong grip: this pick is not used. Then fix the scene (the leader still works) and press N</span></div>
-<div class=row>
- <button onclick="p('/collect/flag/next')"><span class=kbd>N</span> next</button><span class=small>continue after a discard</span></div>
-<div class=row>
- <button onclick="p('/collect/flag/skip')"><span class=kbd>K</span> start mirroring anyway</button><span class=small>the leader can't get within 8° (the robot then creeps slowly to the leader)</span></div>
-<div class=row><span class=kbd>Space</span> / <span class=kbd>Esc</span><span class=small>STOP immediately; the arm freezes and holds. Press START again to continue (finished episodes are kept).</span></div>
+<div class=row><button class=g onclick="p('/collect/flag/grasped')"><span class=kbd>G</span> grasped: take over</button><span class=small>you hold the block but the robot didn't notice</span></div>
+<div class=row><button class=d onclick="p('/collect/flag/discard')"><span class=kbd>X</span> discard this pick</button><span class=small>fumbled, knocked it over, bad grip: not used. Fix the scene (the leader still works), then N</span></div>
+<div class=row><button onclick="p('/collect/flag/next')"><span class=kbd>N</span> next</button><span class=small>continue after a discard</span></div>
+<div class=row><button onclick="p('/collect/flag/skip')"><span class=kbd>K</span> start mirroring anyway</button><span class=small>the leader can't get within 8° (the robot then creeps slowly to the leader)</span></div>
+<div class=row><span class=kbd>Space</span> / <span class=kbd>Esc</span><span class=small>STOP immediately; the arm freezes and holds. START again to continue (finished episodes are kept).</span></div>
 <div id=gaps class=small style="min-height:18px;margin-top:6px"></div></div>
 
 <div class=grid2 style="margin-top:12px">
- <div class=card><h3>Collection plan</h3><ol>
-  <li>For <b>each of the 3 bricks</b>: 30-50 <b>good</b> episodes. Vary the brick's position and orientation every time.</li>
-  <li>Check the episodes (section 5), untick bad ones, export + train (section 6).</li>
-  <li><b>Only after all good runs</b> (the pen is permanent): draw a <b>small</b> cross, choose "defect", 5-10 episodes; then a bigger cross, again 5-10.</li>
-  <li>Watch the counts in section 7 (target ≥60 good, 10-20 defect photos per brick).</li></ol></div>
+ <div class=card><h3>How many and how varied (per block)</h3><ol>
+  <li><b>Round 1: block alone</b>, 30-50 episodes: all over the plate, every orientation (flat, turned, on its side, upside down, near the edge).</li>
+  <li><b>Round 2: with the other blocks lying around</b> as distractors, 20-30 episodes, same block name. This teaches the model to pick <i>this</i> block.</li>
+  <li>Repeat for each of the 3 blocks (each block name = its own set of episodes).</li>
+  <li>Check the episodes (section 5), then export + train per block or all together (section 6).</li></ol>
+  <p class=small>Consistent technique beats speed: same kind of approach and grasp every time. The export removes hesitation and slowness anyway.</p></div>
  <div class=card><h3>When something goes wrong</h3><ul>
   <li><b>Robot does something unexpected</b> → Space. Fix it, START again.</li>
-  <li><b>"missed"</b>: the brick fell out on the way to WP1 → not used; put it back on the plate.</li>
-  <li><b>"re-grip FAILED"</b>: the brick stays on the tape spot → put it back on the orange plate.</li>
-  <li><b>BLOCKED</b>: something is in the way of the arm → clear it, START again.</li>
-  <li><b>Banner stays on MATCH</b>: check the joint gaps below the keys; use K if one joint can't get close.</li></ul></div>
+  <li><b>"missed"</b>: the block fell out on the way to WP1 → not used; put it back on the plate.</li>
+  <li><b>BLOCKED</b>: something is in the arm's way → clear it, START again.</li>
+  <li><b>Banner stays on MATCH</b>: check the joint gaps below the keys; K if one joint can't get close.</li>
+  <li><b>Put-back lands badly</b> (block falls over): fine, that's just a new starting position.</li></ul></div>
 </div>
+
+<details style="margin-top:12px"><summary>Optional extras after WP1 (front-camera photos, tape re-grip): off for now</summary>
+<div class=card style="margin-top:8px">
+ <div class=row><label><input type=checkbox id=o-phase2 onchange="p('/collect/cfg?phase2='+this.checked)"> after WP1 also take <b>front-camera photos at waypoint 2</b> (anomaly data, phase 2; needs "above waypoint 2" + "waypoint 2" taught)</label></div>
+ <div class=row><label><input type=checkbox id=o-regrasp onchange="p('/collect/cfg?regrasp='+this.checked)"> <b>tape-spot 90° re-grip</b> + second photo <span class=warn>(experimental: not working reliably yet)</span></label></div>
+</div></details>
 </section>
 
 <section id=episodes><h2><span class=n>5</span>Episodes <span class="tag now">now</span></h2>
@@ -178,6 +179,8 @@ Drag a box on the full top view to set the table crop (no people in it). Check t
 <section id=export><h2><span class=n>6</span>Clean the demos + train the pick model (ACT) <span class="tag now">now</span></h2>
 <p class=lead>Removes the human's slowness and mistakes before ACT learns: rejects fumbles (more grasp attempts than allowed), slow outliers and camera drop-outs, trims idle time, smooths hand tremor,
 compresses pauses and speeds up free-space motion; the final approach + grasp and the robot's carry to WP1 stay untouched. Then writes a Studio dataset (cameras top + wrist).</p>
+<div class=row>blocks <select id=x-br><option value="">all blocks (one model for all)</option></select>
+ <span class=small>or one block = one dataset / one model per block</span></div>
 <div class=row>speed-up <input id=x-sp type=number value=1.5 step=0.1 min=1 max=3 style="width:65px">×
  · max grasp attempts <input id=x-at type=number value=1 min=1 max=5 style="width:55px">
  · dataset name <input id=x-name placeholder="pick-bricks-v1" style="width:150px">
@@ -194,6 +197,14 @@ compresses pauses and speeds up free-space motion; the final approach + grasp an
 Target per brick: ≥60 good, 10-20 defect (crosses of different sizes).</p>
 <table id=cnt></table>
 </section>
+
+<section id=vision class=future><h2><span class=n>▸</span>Next: pick a <i>specific</i> block among several (ACT + vision) <span class="tag later">after the first ACT</span></h2>
+<p class=lead><b>ACT already is a vision model:</b> it looks at the top + wrist camera images and the arm's joints and outputs the next arm movements. What's added on top:</p>
+<ul><li><b>Block finder on the top camera</b>: finds every block on the orange plate and which one it is (the 3 blocks have different colours; a small detector if colour isn't enough). It decides <i>which</i> block to pick next.</li>
+<li><b>Option A: one ACT per block</b> (export "red only" etc. in section 6), trained with the other blocks as distractors (round 2). The block finder chooses which model runs.</li>
+<li><b>Option B: one policy for all blocks that takes the task as text</b> ("pick up the red block"): SmolVLA in Studio. Every episode already stores its block's task text, so the same data works.</li>
+<li>The finder also checks after the pick that the right block is in the gripper (wrist camera).</li></ul>
+<div class=row><button disabled>learn block colours</button><button disabled>show block finder on the top view</button></div></section>
 
 <section id=p3 class=future><h2><span class=n>3</span>Phase 3: decide good / defect at WP2 <span class="tag later">later</span></h2>
 <p class=lead>Train one PatchCore model per brick on the masked WP2 <i>good</i> images (the brick's colour picks the model), set the threshold with the defect images, measure the smallest cross detected, export to OpenVINO.
@@ -231,7 +242,7 @@ function p(u){q=q.then(()=>fetch(u,{method:'POST'}).then(r=>r.json()).then(()=>r
 function stopAll(){fetch('/collect/stop',{method:'POST'});fetch('/arm/stop',{method:'POST'}).then(refresh)}
 function startCol(){if(!v('brick')){alert('type the brick name first');$('brick').focus();return}
  p(`/collect/start?n=${$('n').value}&brick=${encodeURIComponent(v('brick'))}&label=${$('label').value}`)}
-function ex(dry){p(`/collect/export?speedup=${$('x-sp').value}&max_attempts=${$('x-at').value}&name=${encodeURIComponent(v('x-name'))}&dry=${dry}`)}
+function ex(dry){p(`/collect/export?speedup=${$('x-sp').value}&max_attempts=${$('x-at').value}&name=${encodeURIComponent(v('x-name'))}&dry=${dry}&bricks=${encodeURIComponent($('x-br').value)}`)}
 function live(id,url,ms){const im=$(id);const next=()=>setTimeout(()=>{im.src=url+'?t='+Date.now()},ms);im.onload=next;im.onerror=()=>setTimeout(next,1500);next()}
 ['top','front','wrist'].forEach(c=>live('c-'+c,'/snap/'+c,250));
 live('v-top','/collect/view/top',300);live('v-wrist','/collect/view/wrist',300);live('v-front','/collect/view/front',500);live('full-top','/snap/top',400);
@@ -244,12 +255,11 @@ function slotHtml(name,w){if(!w||!w.length)return '<div class=slotempty>not taug
  <button class=sm onclick="p('/arm/wp/${i}/goto?routine=${name}')">go</button> <button class=sm onclick="p('/arm/wp/${i}/update?routine=${name}')">set</button>
  <button class=sm onclick="if(confirm('delete this pose?'))p('/arm/wp/${i}/delete?routine=${name}')">✕</button></td></tr>`).join('')+'</table>'}
 function precheck(s){const t=n=>((s.all[n]||{}).waypoints||[]).length>0,ok=(c,txt)=>`<div class="${c?'ok':'warn'}">${c?'✓':'✗'} ${txt}</div>`;
- const tape=t('tape_above')&&t('tape_place');
- $('precheck').innerHTML=ok(s.connected,'arm connected (section 1)')+ok(t('home'),'start pose taught')+ok(t('wp1'),'waypoint 1 taught')+
-  ok(t('wp2_above'),'above waypoint 2 taught (for the straight-down approach)')+ok(t('wp2'),'waypoint 2 photo pose taught')+
-  ok(tape,'tape spot taught (above + on): enables the 90° re-grip and photo 2')+
-  `<div class=small style="margin-top:4px">${t('drops')?'✓ reset spots taught: the robot puts the brick back on the orange plate itself':'○ no reset spots (optional): you put the brick back yourself during MATCH'}</div>`+
-  '<div class=small style="margin-top:6px">Also: brick on the orange plate · top crop + masked front view checked (section 3) · leader arm within reach.</div>'}
+ const ph2=C&&C.cfg&&C.cfg.phase2,rg=C&&C.cfg&&C.cfg.regrasp;
+ $('precheck').innerHTML=ok(s.connected,'arm connected (section 1)')+ok(t('home'),'start pose taught (section 2)')+ok(t('wp1'),'waypoint 1 taught (section 2)')+
+  `<div class=small style="margin-top:4px">${t('drops')?'✓ reset spots taught: the block is dropped at a random one':'○ no reset spots (optional): the block is put back where it was picked'}</div>`+
+  (ph2?ok(t('wp2_above')&&t('wp2'),'photos ON: above waypoint 2 + waypoint 2 taught'):'')+(ph2&&rg?ok(t('tape_above')&&t('tape_place'),'re-grip ON: tape spot taught'):'')+
+  '<div class=small style="margin-top:6px">Also: block on the orange plate · top crop checked (section 3) · leader arm within reach.</div>'}
 function showArm(s){A=s;precheck(s);$('mode').textContent=!s.connected?'not connected':s.running?'busy':s.mode;$('conn').style.display=s.connected?'none':'';
  ['mirror','hold','limp'].forEach(k=>{$('m-'+k).classList.toggle('on',s.mode==k);$('m-'+k).disabled=!s.connected||s.running});
  $('jt').innerHTML=Object.entries(s.pos||{}).map(([k,x])=>`<tr><td>${k}</td><td>${x}</td></tr>`).join('')+(s.bus_errors?`<tr><td colspan=2 class=err>bus errors: ${s.bus_errors}</td></tr>`:'')||'<tr><td class=small>connect the arm</td></tr>';
@@ -262,10 +272,14 @@ function showCol(c){C=c;const b=$('banner');b.style.background=COL[c.state]||'#9
  $('gaps').innerHTML=c.info&&c.info.gaps?'leader gap: '+Object.entries(c.info.gaps).map(([k,x])=>`${k} <b class="${x<=8?'ok':'warn'}">${x}°</b>`).join(' · '):'';
  if(!cfgShown){cfgShown=true;$('c-speed').value=Math.round(c.cfg.speed*100);$('spv').textContent=$('c-speed').value+'%';
   $('c-speed').onchange=()=>{$('spv').textContent=$('c-speed').value+'%';p('/collect/cfg?speed='+$('c-speed').value/100)};
+  $('o-phase2').checked=!!c.cfg.phase2;$('o-regrasp').checked=!!c.cfg.regrasp;
   $('c-jit').value=c.cfg.roll_jitter;$('c-jit').onchange=()=>p('/collect/cfg?roll_jitter='+$('c-jit').value)}
  $('eps').innerHTML=c.sessions.map(se=>`<div class=small style="margin-top:8px"><b>${esc(se.session)}</b></div><table>`+se.episodes.map(e=>{const bad=e.outcome!='success';
   return `<tr><td>${esc(e.episode)}</td><td class="${bad?'err':'ok'}">${esc(e.outcome)}</td><td>${e.pick_s??''} s</td><td>${e.grasp_attempts??''} att.</td>
   <td>${bad?'':`<label><input type=checkbox ${e.keep===false?'':'checked'} onchange="p('/collect/keep?session=${encodeURIComponent(se.session)}&episode=${encodeURIComponent(e.episode)}&on='+this.checked)"> use</label>`}</td></tr>`}).join('')+'</table>').join('')||'<span class=small>no episodes yet</span>';
+ const br=[...new Set(c.sessions.map(se=>se.session.split('_').slice(2).join('_')).filter(x=>x))].sort();
+ const bo='<option value="">all blocks (one model for all)</option>'+br.map(b=>`<option value="${esc(b)}">${esc(b)} only</option>`).join('');
+ if($('x-br').dataset.sig!=bo){const cur=$('x-br').value;$('x-br').innerHTML=bo;$('x-br').value=cur;$('x-br').dataset.sig=bo}
  const xl=$('xlog');if(c.export_log&&xl.textContent!=c.export_log){xl.textContent=c.export_log;xl.scrollTop=1e9}}
 function refresh(){return Promise.all([fetch('/arm/status').then(r=>r.json()).then(showArm),fetch('/collect/status').then(r=>r.json()).then(showCol)]).catch(()=>{})}
 let rc='';function slow(){fetch('/status').then(r=>r.json()).then(s=>{const k=JSON.stringify(s.recent);if(k!=rc){rc=k;

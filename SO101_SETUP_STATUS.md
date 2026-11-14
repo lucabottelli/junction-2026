@@ -359,6 +359,25 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **On another computer:** `gh repo clone lucabottelli/junction-2026 ~/junction26`. Running the tool there needs Physical AI Studio and the station hardware. The station-specific serials and devices are at the top of `capture.py` and `arm.py`.
     - **Teammates:** invite them under GitHub → Settings → Collaborators.
 
+19. **Focus on the pick: the episode is now pick → WP1 → put back. Photos and re-grip are optional and off** (2026-11-14 ≈03:30, user).
+    - **The tape-spot re-grip doesn't work on the real arm** (issue 12). The user wants to first teach the pick properly, with many iterations per specific block, and use ACT together with a vision model.
+    - **Episode:** start pose → MATCH → recorded pick → robot rises and carries to WP1 (recorded) → **put-back**.
+      - Put-back goes from WP1 to above the original grasp spot, turns by a random wrist roll (±"put-back turn"), descends slowly to the recorded grasp pose, opens and rises. The path is known to be clear and the block gets a new orientation each time.
+      - With reset spots (`drops`) taught, it drops the block at a random one instead.
+    - **Phase 2 photos and the tape re-grip** are switches (`phase2`, `regrasp` in `collect_settings.json`), off by default, in a collapsed "optional extras" box. `wp2` and the tape spot are only required when the switches are on.
+    - **Per block:**
+      - Each episode stores the task `pick up the <block> brick`, written per frame into the Studio dataset.
+      - Export can select one block ("red only" → one dataset/ACT per block) or all.
+      - Plan per block:
+        - **Round 1:** the block alone, 30–50 episodes, every position and orientation.
+        - **Round 2:** the other blocks present as distractors, 20–30 episodes.
+    - **ACT + vision:**
+      - ACT is itself a vision policy (top + wrist images + joints → actions). What gets added is a top-camera **block finder** (colour, or a small detector) that decides which block to pick and where.
+      - **Option A:** one ACT per block, chosen by the finder.
+      - **Option B:** one language-conditioned policy (SmolVLA, "pick up the red block") on the same data.
+      - Shown as a "Next" card on `/arm`.
+    - **Simulated:** 2 episodes; put-back went to the pick spot with a random roll, descended slowly and released; task stored per episode; `--bricks red` export filter works.
+
 ---
 
 ## 5. Issues and fixes log
@@ -377,6 +396,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 | 9 | 11-14 01:40 | Capture tool: no brick detected and the zoom panels blank on every camera | B (empty background) was pressed with the brick still on the spot, so the brick became part of the "table" and the difference detector couldn't see it | Deleted the bad backgrounds. B now refuses if colour detection finds anything in the area (Shift+B forces it), and `/background/clear` was added |
 | 10 | 11-14 01:50 | Auto-capture took duplicate shots, then got stuck at 6/60 | (a) "Brick moved" was a raw pixel difference against the last shot, so noise, shadows and people's lighting changes triggered it (3 identical-pose shots at 01:48:48/52/55), while a real 90° turn of the square brick looked "the same". (b) The front camera found 0 bricks: a plate nudged after B left a thin rim arc that merged with the brick, and the merged blob touched the area edge and was rejected. | Auto mode now tracks the brick's **geometric pose** (centre + minAreaRect angle, respecting 90°/180° symmetry). It shoots after 0.8 s of stable pose, if it moved ≥12 px (~6 mm) or turned ≥10°. After 4 s of "not moved enough" it shows the measured move and offers **Space = shoot anyway**. The tick is wrapped in try/except so it can't die. Detection removes thin structures with a per-camera filter (top 9, front 15, wrist 13 px at ¼ scale). New **"BACKGROUND OUTDATED"** warning when >4% of the area differs from the background. Also fixed a stillness-timer bug found while testing. |
 | 11 | 11-14 ≈02:10 | User frustrated with auto-capture; then the front preview looked frozen | Auto mode was too complex and unreliable. The page held 6 never-ending MJPEG streams, at the browser's ~6-connections-per-host limit, so one feed could starve. A camera read error also silently killed that camera's thread. | **Simplified to manual only:** one click = one capture from all cameras, never refused (no brick → the whole area is saved, flagged `brick_found: false` in meta), clicks are queued and never dropped, auto mode removed. Previews are now refreshed snapshots with no open connections. Camera threads catch errors and **reconnect after 3 s without frames**, and the page shows "FROZEN … auto-reconnecting" with frame age per camera. |
+| 12 | 11-14 ≈03:25 | Tape-spot 90° re-grip doesn't work on the real arm | Not diagnosed yet. Candidates: `tape_place` too high or too low (the block tilts or drops when released), gripper not open wide enough for the turned block, block not centred under the fingers after the turn, or the turned block too wide for the gripper | Disabled by default (decision 19). To debug later with the "test re-grip" button, watching each step |
 
 ---
 

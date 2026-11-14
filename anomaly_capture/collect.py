@@ -48,7 +48,7 @@ class Collector:
         self.S, self.A, self.ctx, self.DATA = S, A, ctx, DATA
         self.EP = ROOT / "episodes"; self.EP.mkdir(exist_ok=True)
         self.cfg_path = Path(__file__).resolve().parent / "collect_settings.json"
-        self.cfg = {"home": "home", "wp1": "wp1", "wp2": "wp2", "drops": "drops", "speed": 0.5, "roll_jitter": 45,
+        self.cfg = {"home": "home", "wp1": "wp1", "wp2": "wp2", "drops": "drops", "phase2": False, "regrasp": False, "speed": 0.5, "roll_jitter": 45,
                     "act_roi": {k: prep.default_act_roi(k) for k in REC_CAMS}}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
@@ -215,14 +215,15 @@ class Collector:
 
     def episode(self, idx, brick, label):
         A = self.A
-        home = self.wps("home")[0]["pos"]; wp1 = self.wps("wp1")[0]["pos"]; wp2 = self.wps("wp2")
+        home = self.wps("home")[0]["pos"]; wp1 = self.wps("wp1")[0]["pos"]
+        wp2 = self.wps("wp2") if self.cfg.get("phase2") else []
         drops = self.slot("drops")
         gmin, gmax = A.fl["gripper"]
         g_open = max(home["gripper"], gmin + 0.35 * (gmax - gmin))
         ep_id = f"ep{idx:04d}_{datetime.now().strftime('%H%M%S')}"
         meta = {"episode": ep_id, "session": self.session, "brick": brick, "label": label, "fps": FPS,
                 "cams": REC_CAMS, "act_roi": self.cfg["act_roi"], "joints": JOINTS,
-                "follower_limits": A.fl, "leader_limits": A.ll, "task": "pick up the brick",
+                "follower_limits": A.fl, "leader_limits": A.ll, "task": f"pick up the {brick} brick",
                 "phase1": "human pick + automatic carry to WP1 (recorded for ACT)",
                 "start": datetime.now().isoformat(timespec="seconds")}
 
@@ -281,6 +282,7 @@ class Collector:
                 # PHASE 1b: automatic carry to WP1, STILL RECORDED (clean robot-made demo of the carry)
                 time.sleep(TAIL_S)
                 self.hold_here(); g_lock = A.cmd["gripper"]          # clamp command fixed from here on
+                grasp_pose = dict(A.cmd)                             # where the brick was: put it back here later
                 self.state = "carry"; self.say("● REC  robot carries the brick to waypoint 1: hands off")
                 self.rise(wp1)
                 self.goto(wp1, gripper=g_lock)
@@ -313,9 +315,18 @@ class Collector:
 
         # 2 PHASE 2: WP1 -> above WP2 -> down -> photo -> up -> tape spot: set down, re-grip turned 90 deg
         #   -> above WP2 -> down -> photo of the rotated brick -> up.  Clamp command identical throughout.
+        n_img, on_tape = 0, False
+        if self.cfg.get("phase2"):
+            n_img, on_tape = self.phase2(wp1, wp2, g_lock, g_open, label, brick, idx)
+        self.info = {"images": n_img}
+        self.reset(home, wp1, drops, grasp_pose, g_lock, g_open, on_tape)
+        return True
+
+    def phase2(self, wp1, wp2, g_lock, g_open, label, brick, idx):
+        """OPTIONAL: WP1 -> above WP2 -> down -> photo -> up [-> tape spot re-grip 90 deg -> photo 2]."""
         self.state = "capture"; n_img = 0
         cams = [c for c in self.cfg.get("inspect_cams", ["front"]) if c in self.S.live]
-        tape = self.slot("tape_above") and self.slot("tape_place")
+        tape = self.cfg.get("regrasp") and self.slot("tape_above") and self.slot("tape_place")
 
         def shoot(suffix, note):
             n = 0
@@ -342,25 +353,34 @@ class Collector:
             else:
                 on_tape = True
                 self.say("re-grip FAILED: the brick is left on the tape spot (put it back on the orange plate)", False)
-        self.info = {"images": n_img}
+        return n_img, on_tape
 
-        # RESET (collection only, not part of the task)
-        self.state = "reset_auto"
+    def reset(self, home, wp1, drops, grasp_pose, g_lock, g_open, on_tape):
+        """Collection only: put the brick back on the orange plate so the next pick can start.
+        Reset spots taught -> drop at a random one. Otherwise -> put it back exactly where it was picked
+        (that path is known to be clear), turned by a random wrist angle for variety."""
+        A = self.A; self.state = "reset_auto"
         if on_tape:
-            self.goto(home, gripper=g_open); time.sleep(1.0); return True
-        if drops:      # random spot on the orange plate -> next pick starts from a new position by itself
-            self.say("resetting: robot drops the brick at a random spot on the orange plate")
+            self.goto(home, gripper=g_open); time.sleep(1.0); return
+        jit = random.uniform(-1, 1) * self.cfg["roll_jitter"] * TICK_PER_DEG
+        if drops:
+            self.say("resetting: robot drops the brick at a random reset spot on the orange plate")
             self.goto(wp1, gripper=g_lock)
             d = random.choice(drops)["pos"]
-            roll = d["wrist_roll"] + random.uniform(-1, 1) * self.cfg["roll_jitter"] * TICK_PER_DEG
-            self.goto(d, gripper=g_lock, wrist_roll=roll)
+            self.goto(d, gripper=g_lock, wrist_roll=d["wrist_roll"] + jit)
             self.goto(dict(A.cmd), 1.0, gripper=g_open); time.sleep(0.2)      # release
             self.rise(wp1)
-        elif tape:     # no reset spots taught: leave it on the tape spot, the human moves it during MATCH
-            self.say("resetting: brick left on the tape spot - put it on the orange plate during MATCH")
-            self.place_on_tape(g_lock, g_open)
+        else:
+            self.say("resetting: robot puts the brick back where it picked it, turned a bit")
+            self.goto(wp1, gripper=g_lock)
+            above = {**grasp_pose, "shoulder_lift": wp1["shoulder_lift"], "elbow_flex": wp1["elbow_flex"],
+                     "wrist_flex": wp1["wrist_flex"]}
+            roll = grasp_pose["wrist_roll"] + jit
+            self.goto(above, gripper=g_lock, wrist_roll=roll)
+            self.goto(grasp_pose, self.cfg["speed"] * 0.4, gripper=g_lock, wrist_roll=roll)   # gently down
+            self.goto(dict(A.cmd), 0.4, gripper=g_open); time.sleep(0.2)                       # let go
+            self.goto(above, self.cfg["speed"] * 0.6, gripper=g_open, wrist_roll=roll)          # straight up
         self.goto(home, gripper=g_open)
-        return True
 
     # ------------------------------------------------------------------ session
     def run(self, n, brick, label):
@@ -427,9 +447,10 @@ def make_router(S, A, ctx, DATA, ROOT):
         if A.f is None: C.say("connect the arm on /arm first", False); return status()
         if not brick.strip(): C.say("type the brick name first", False); return status()
         try:
-            for k in ("home", "wp1", "wp2"): C.wps(k)
-            if not C.slot("drops") and not (C.slot("tape_above") and C.slot("tape_place")):
-                raise RuntimeError("teach the tape spot (above + on) or reset spots on the orange plate, so the brick can be put down")
+            for k in ("home", "wp1"): C.wps(k)
+            if C.cfg.get("phase2"): C.wps("wp2")
+            if C.cfg.get("phase2") and C.cfg.get("regrasp") and not (C.slot("tape_above") and C.slot("tape_place")):
+                raise RuntimeError("re-grip is on: teach the tape spot (above + on) first, or switch the re-grip off")
         except Exception as e:
             C.say(str(e), False); return status()
         threading.Thread(target=C.run, args=(max(1, n), brick.strip(), label), daemon=True).start()
@@ -457,7 +478,9 @@ def make_router(S, A, ctx, DATA, ROOT):
 
     @r.post("/collect/cfg")
     def cfg(home: str = "", wp1: str = "", wp2: str = "", drops: str = "", speed: float = 0,
-            roll_jitter: float = -1, inspect_cams: str = ""):
+            roll_jitter: float = -1, inspect_cams: str = "", phase2: str = "", regrasp: str = ""):
+        if phase2: C.cfg["phase2"] = phase2 == "true"
+        if regrasp: C.cfg["regrasp"] = regrasp == "true"
         if home: C.cfg["home"] = home
         if wp1: C.cfg["wp1"] = wp1
         if wp2: C.cfg["wp2"] = wp2
@@ -500,11 +523,12 @@ def make_router(S, A, ctx, DATA, ROOT):
                         headers={"Cache-Control": "no-store"})
 
     @r.post("/collect/export")
-    def run_export(speedup: float = 1.5, max_attempts: int = 1, name: str = "", dry: bool = False):
+    def run_export(speedup: float = 1.5, max_attempts: int = 1, name: str = "", dry: bool = False, bricks: str = ""):
         if export["proc"] is not None: return status()
         args = [sys.executable, "-u", str(Path(__file__).resolve().parent / "export_act.py"),
                 "--speedup", str(speedup), "--max-attempts", str(max_attempts)]
         if name: args += ["--name", name]
+        if bricks: args += ["--bricks"] + [b for b in bricks.split(",") if b]
         if dry: args += ["--dry-run"]
         export["proc"] = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         export["log"] = " ".join(args[2:]) + "\n"

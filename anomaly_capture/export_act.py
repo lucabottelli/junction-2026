@@ -127,7 +127,7 @@ def main():
     ap.add_argument("--max-step-deg", type=float, default=6.0)
     ap.add_argument("--smooth", type=float, default=1.5)
     ap.add_argument("--bricks", nargs="*"); ap.add_argument("--sessions", nargs="*")
-    ap.add_argument("--name", default=""); ap.add_argument("--task", default="pick up the brick")
+    ap.add_argument("--name", default=""); ap.add_argument("--task", default="", help="override the per-episode task (default: 'pick up the <brick> brick')")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--episodes", default=str(ROOT / "episodes"), help="raw episodes folder")
     args = ap.parse_args()
@@ -154,8 +154,13 @@ def main():
     from schemas.dataset import Dataset
 
     pid, eid = studio_ids()
-    name = args.name or f"pick-{plans[0][1]['session']}-x{len(plans)}"
-    body = json.dumps({"name": name, "default_task": args.task, "project_id": pid, "environment_id": eid}).encode()
+    bricks = sorted({m.get("brick") or "?" for _, m, *_ in plans})
+    task_of = lambda m: args.task or (m.get("task") if m.get("task") and m.get("brick") else "pick up the brick")
+    tasks = sorted({task_of(m) for _, m, *_ in plans})
+    name = args.name or f"pick-{'-'.join(bricks)}-x{len(plans)}"
+    body = json.dumps({"name": name, "default_task": tasks[0] if len(tasks) == 1 else "pick up the brick",
+                       "project_id": pid, "environment_id": eid}).encode()
+    print(f"blocks: {bricks} · tasks: {tasks}")
     req = urllib.request.Request(f"{API}/dataset", data=body, headers={"Content-Type": "application/json"}, method="POST")
     ds = Dataset(**json.load(urllib.request.urlopen(req, timeout=10)))
     print(f"Studio dataset '{name}' created: {ds.id}")
@@ -172,7 +177,7 @@ def main():
                 for c in POLICY_CAMS:
                     img = cv2.imread(str(d / c / f"{i:06d}.jpg"))
                     obs[c] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                mut.add_frame(obs, {f"{n}.pos": float(ac[r, j]) for j, n in enumerate(JOINTS)}, args.task)
+                mut.add_frame(obs, {f"{n}.pos": float(ac[r, j]) for j, n in enumerate(JOINTS)}, task_of(m))
             mut.save_episode(); print(f"  wrote {name_} ({len(idx)} frames)")
     finally:
         mut.teardown()

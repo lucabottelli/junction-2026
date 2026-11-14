@@ -9,7 +9,7 @@ Background movement (people walking past the fixed cameras) is handled in two wa
   * Anomaly images of the held brick: the front RealSense depth keeps only the nearest object cluster
     (gripper + brick) and paints everything behind it flat grey (`inhand_mask`).
 """
-import json
+import json, warnings
 from pathlib import Path
 
 import cv2
@@ -67,15 +67,90 @@ INHAND = {"roi": None,          # search area, full-res x0,y0,x1,y1 (= the front
           "fx": 1380.0,         # colour focal length in px at 1920 wide (the aligned depth lives in colour pixels)
           "expect_z_mm": None,  # distance of the held cluster measured by /depth/autotune at WP2 (None = no prior)
           "min_mm": 50,         # nearer than this is noise: the D415 can't measure it even with a disparity shift
-          "max_obj_mm": 400}    # a HELD object is nearer than this; the room/table/robot column behind it is farther
+          "max_obj_mm": 400,    # a HELD object is nearer than this; the room/table/robot column behind it is farther
+          "brick": None,        # brick colour name: set -> the mask comes from the brick's COLOUR (brick_mask), not depth
+          "bg": None}           # description of the empty-scene depth background in use (file, taken, config) or None
 _CFG = object()                 # "take this parameter from INHAND"
 TUNING = False                  # capture.py sets this during /depth/autotune: photos taken meanwhile are not masked
+_BG = {"depth": None}           # the empty-scene depth background itself (uint16 mm, aligned to colour), see set_background
+BG_MARGIN_MM = 15               # a pixel is foreground when it is nearer than the background by this + 3 % of its depth
 
 
 def configure_inhand(**kw):
     """Set INHAND keys (unknown keys are ignored). Returns the current config."""
     INHAND.update({k: v for k, v in kw.items() if k in INHAND})
     return dict(INHAND)
+
+
+def set_background(depth_mm, desc=None):
+    """Use this empty-scene depth (uint16 mm, same alignment as the live depth; None = no background) for every
+    in-hand mask. desc (JSON-safe dict: file, taken, resolution, shifts) is recorded with each photo as provenance."""
+    _BG["depth"] = None if depth_mm is None else np.asarray(depth_mm, np.uint16)
+    INHAND["bg"] = (dict(desc) if desc else {"source": "in memory"}) if depth_mm is not None else None
+
+
+MASK_SCALE = 4                  # inhand_mask works on depth downscaled by this (nearest neighbour)
+
+
+def small_depth(depth_mm):
+    """The depth image inhand_mask actually looks at: every MASK_SCALE-th pixel (nearest neighbour). A background
+    stored at this size lines up pixel for pixel with it."""
+    H, W = depth_mm.shape[:2]
+    return cv2.resize(depth_mm, (W // MASK_SCALE, H // MASK_SCALE), interpolation=cv2.INTER_NEAREST)
+
+
+def median_depth(frames, min_valid=0.5):
+    """Per-pixel median of the VALID values of several depth frames (0 = no data); pixels valid in fewer than
+    min_valid of the frames -> 0. Used for the empty-scene background."""
+    st = np.stack([np.asarray(f, np.float32) for f in frames])
+    st[st == 0] = np.nan
+    ok = np.isfinite(st).mean(0) >= min_valid
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)            # all-NaN pixels: masked out by `ok` anyway
+        med = np.nanmedian(st, 0)
+    return np.where(ok, np.nan_to_num(med), 0).round().astype(np.uint16)
+
+
+def merge_backgrounds(layers):
+    """Background depths taken under several depth windows (disparity shifts) -> one: each pixel from the first
+    layer where it has depth (they measure the same surface; a near window sees what a far one can't and back)."""
+    out = np.zeros_like(layers[0])
+    for L in layers:
+        out = np.where(out == 0, L, out)
+    return out
+
+
+def foreground(depth_mm, bg_mm, margin_mm=BG_MARGIN_MM):
+    """Bool: pixels with depth that are clearly NEARER than the empty-scene background (or where the background
+    had no depth). Both arrays in mm, same shape."""
+    d = depth_mm.astype(np.int32); b = bg_mm.astype(np.int32)
+    return (d > 0) & ((b == 0) | (d < b - (margin_mm + 0.03 * b)))
+
+
+def plane_fit(depth_small, comp, fx_small, cx, cy, max_pts=4000):
+    """Fit a plane to the 3D points of a cluster (small-image pixels `comp`). -> (inlier fraction, in-plane spread
+    of the inliers: two standard deviations in mm, residual tolerance mm, tilt of the plane from facing the camera in
+    degrees). A table top is one large plane seen at a steep angle; gripper + brick are several surfaces at
+    different depths, or a small face."""
+    ys, xs = np.nonzero(comp)
+    z = depth_small[ys, xs].astype(np.float64)
+    ok = z > 0; ys, xs, z = ys[ok], xs[ok], z[ok]
+    if z.size < 30: return 0.0, (0.0, 0.0), 0.0, 0.0
+    if z.size > max_pts:
+        idx = np.random.default_rng(0).choice(z.size, max_pts, replace=False); ys, xs, z = ys[idx], xs[idx], z[idx]
+    P = np.stack([(xs - cx) * z / fx_small, (ys - cy) * z / fx_small, z], 1)
+    tol = max(4.0, 0.02 * float(np.median(z)))
+    inl = np.ones(len(P), bool)
+    for _ in range(3):                                        # least squares, then refit on the inliers
+        c = P[inl].mean(0); _, _, vt = np.linalg.svd(P[inl] - c, full_matrices=False)
+        res = np.abs((P - c) @ vt[2])
+        new = res <= tol
+        if new.sum() < 30: break
+        inl = new
+    c = P[inl].mean(0); _, sv, vt = np.linalg.svd(P[inl] - c, full_matrices=False)
+    spread = (float(sv[0] / np.sqrt(inl.sum())), float(sv[1] / np.sqrt(inl.sum())))
+    tilt = float(np.degrees(np.arccos(min(1.0, abs(vt[2][2])))))
+    return float(inl.mean()), spread, tol, tilt
 
 
 def fill_holes(mask, depth=None, z_mm=None, band_mm=70, px_per_mm=None, max_fill_mm=8.0, stats=None):
@@ -131,8 +206,9 @@ def _search_region(shape, roi, scale):
 
 
 def inhand_mask(depth_mm, band_mm=70, max_mm=900, min_px=4000, min_mm=_CFG, roi=_CFG, expect_z_mm=_CFG, fx=_CFG,
-                min_obj_mm=30, min_density=0.4, max_missing=0.25, z_tol_mm=None, max_obj_mm=_CFG,
-                max_hole_mm=25, max_obj_size_mm=300, max_outside=0.75):
+                min_obj_mm=18, min_density=0.4, max_missing=0.25, z_tol_mm=None, max_obj_mm=_CFG,
+                max_hole_mm=25, max_obj_size_mm=300, max_outside=0.75, bg=_CFG, bg_margin_mm=BG_MARGIN_MM,
+                plane_inliers=0.85, plane_spread_mm=25, plane_tilt_deg=35):
     """Mask of the held object (gripper + brick) from aligned depth (uint16 mm, 0 = no data).
 
     Returns (mask uint8 0/255 at the depth's resolution, info dict) or (None, reason str). It refuses (None) rather
@@ -156,26 +232,38 @@ def inhand_mask(depth_mm, band_mm=70, max_mm=900, min_px=4000, min_mm=_CFG, roi=
          and wide holes without depth (fill_holes). -> None if any single no-depth hole is bigger than a
          max_hole_mm square at that distance (a brick-sized object without depth sits in front of the cluster: the
          brick is inside the camera's minimum range), or all of them together exceed max_missing of the outline.
-    Parameters left at their default come from INHAND (configure_inhand); pass None to switch roi/expect_z_mm off.
+    0. With an empty-scene depth background (`bg`, default: set_background()), only pixels clearly nearer than
+       the background count (foreground()): the table, plates and the parked arm can never be the cluster.
+       Without one, a cluster that is one big plane seen at a steep angle (>= plane_inliers of it within a few mm
+       of a plane spanning >= plane_spread_mm standard deviation in both directions, tilted >= plane_tilt_deg from
+       facing the camera) is refused: that is the table top in front of the camera, not a held brick.
+    Parameters left at their default come from INHAND (configure_inhand); pass None to switch roi/expect_z_mm/bg off.
     """
     if depth_mm is None: return None, "no depth"
     d = depth_mm
     H, W = d.shape[:2]
-    s = 4
+    s = MASK_SCALE
     if W // s < 4 or H // s < 4: return None, f"depth image too small ({W}x{H})"
     min_mm = INHAND["min_mm"] if min_mm is _CFG else (min_mm or 0)
     zmax = INHAND.get("max_obj_mm") if max_obj_mm is _CFG else max_obj_mm
     roi = INHAND["roi"] if roi is _CFG else roi
     expect = INHAND["expect_z_mm"] if expect_z_mm is _CFG else expect_z_mm
     fxi = float(INHAND["fx"] if fx is _CFG else fx) * W / 1920.0          # focal length in pixels of THIS image
-    small = cv2.resize(d, (W // s, H // s), interpolation=cv2.INTER_NEAREST)
+    small = small_depth(d)
     reg = _search_region(small.shape, roi, W / 1920.0 / s)
     si = small.astype(np.int32)
     valid = (small > min_mm) & (small < max_mm)
+    bgd = _BG["depth"] if bg is _CFG else bg
+    use_bg, bg_note = False, None
+    if bgd is not None:                      # stored at the small size (small_depth) or at the depth's own size
+        bsmall = bgd if bgd.shape[:2] == small.shape[:2] else small_depth(bgd) if bgd.shape[:2] == d.shape[:2] else None
+        if bsmall is None: bg_note = f"background {bgd.shape[1]}x{bgd.shape[0]} doesn't fit depth {W}x{H}: ignored"
+        else: valid &= foreground(small, bsmall, bg_margin_mm); use_bg = True
     v = small[valid & reg]
     min_small = max(1, min_px // (s * s))
     if v.size < min_small:
-        return None, f"no depth within {min_mm}-{max_mm} mm in the search area ({v.size * s * s} px)"
+        return None, (f"no depth within {min_mm}-{max_mm} mm in the search area ({v.size * s * s} px)"
+                      + (" in front of the depth background" if use_bg else "") + (f"; {bg_note}" if bg_note else ""))
     edges = np.arange(min_mm, max_mm + 20, 20)
     hist, edges = np.histogram(v, bins=edges)
     thr = max(1, min_small // 4, int(hist.max() * 0.25))
@@ -228,12 +316,88 @@ def inhand_mask(depth_mm, band_mm=70, max_mm=900, min_px=4000, min_mm=_CFG, roi=
         if hs["open_missing_px"] > max_missing * tot:
             return None, (f"object at {z:.0f} mm: {hs['open_missing_px'] / tot:.0%} of it has no depth "
                           "(too close for the depth window? run the depth auto-tune)")
+        if not use_bg:
+            frac, spread, ptol, tilt = plane_fit(small, comp, fxi / s, (W / s) / 2.0, (H / s) / 2.0)
+            if frac >= plane_inliers and min(spread) >= plane_spread_mm and tilt >= plane_tilt_deg:
+                reasons.append(f"cluster at {z:.0f} mm is a flat surface ({frac:.0%} within {ptol:.0f} mm of a plane "
+                               f"tilted {tilt:.0f} deg, {2 * spread[0]:.0f} x {2 * spread[1]:.0f} mm): the table? "
+                               "store a depth background")
+                continue
         mk = cv2.dilate(mk, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
         mk = cv2.resize(mk, (W, H), interpolation=cv2.INTER_NEAREST)
         return mk, {"z_mm": round(z), "area_px": int(cv2.countNonZero(mk)), "band_mm": band_mm, "density": round(dens, 2),
-                    "search": "roi" if roi else "centre", "holes_open_px": (hs["open_seen_px"] + hs["open_missing_px"]) * s * s}
-    if not reasons: reasons.append("no substantial depth peak in the search area")
+                    "search": "roi" if roi else "centre", "holes_open_px": (hs["open_seen_px"] + hs["open_missing_px"]) * s * s,
+                    "bg": use_bg, **({"bg_note": bg_note} if bg_note else {})}
+    if not reasons: reasons.append("no substantial depth peak in the search area" + (" in front of the background" if use_bg else ""))
+    if bg_note: reasons.append(bg_note)
     return None, "; ".join(reasons[:3])
+
+
+def complete_mask(img, mask, s=4, sat_min=185, val_min=80, hue_tol=9, grow_px=120, min_peak=0.15):
+    """Fill what depth misses on the held object, by colour. At ~10 cm glossy Duplo returns depth on only ~half of
+    its surface, so the depth mask has holes and missing edges. The saturated hues found INSIDE the depth mask (the
+    brick, the jaw pad) are grown into same-hue pixels within grow_px of it; only components touching the depth mask
+    are kept, then holes are filled (a pen cross stays inside). Table / tape / plates are excluded by saturation, hue
+    or distance. Shared by training captures and live inspection. -> mask (same size), unchanged if no colour peak."""
+    if mask is None or img is None: return mask
+    H, W = mask.shape[:2]
+    sm = cv2.resize(img, (W // s, H // s), interpolation=cv2.INTER_AREA)
+    seed = cv2.resize(mask, (W // s, H // s), interpolation=cv2.INTER_NEAREST) > 0
+    hsv = cv2.cvtColor(sm, cv2.COLOR_BGR2HSV); h = hsv[..., 0].astype(np.int16)
+    sat = (hsv[..., 1] >= sat_min) & (hsv[..., 2] >= val_min)
+    hs = h[seed & sat]
+    if hs.size < 200: return mask
+    raw = np.bincount(hs, minlength=180).astype(float); tot = raw.sum()
+    sm_h = sum(np.roll(raw, k) for k in range(-3, 4))           # circular smoothing, for finding peaks
+    col = np.zeros_like(seed)
+    for i in range(3):                                          # up to 3 dominant hues (brick, jaw pad, ...)
+        h0 = int(np.argmax(sm_h))
+        idx = [(h0 + k) % 180 for k in range(-hue_tol, hue_tol + 1)]
+        mass = raw[idx].sum()
+        if mass <= 0 or (i and mass < min_peak * tot): break
+        d = np.abs(h - h0); d = np.minimum(d, 180 - d)
+        col |= sat & (d <= hue_tol)
+        for k in range(-12, 13): sm_h[(h0 + k) % 180] = 0; raw[(h0 + k) % 180] = 0
+    near = cv2.dilate(seed.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * (grow_px // s) + 1,) * 2)) > 0
+    u = (seed | (col & near)).astype(np.uint8)
+    u = cv2.morphologyEx(u, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    n, lab = cv2.connectedComponents(u)
+    keep = np.isin(lab, np.unique(lab[seed & (u > 0)])) & (lab > 0)
+    out = fill_holes(keep.astype(np.uint8) * 255)
+    return cv2.resize(out, (W, H), interpolation=cv2.INTER_NEAREST)
+
+
+BRICK_HUES = {"pink": (168, 1), "red": (168, 1), "blue": (95, 115), "green": (40, 88)}   # OpenCV hue 0-179, range may wrap
+
+
+def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_weak=140):
+    """Mask of the held brick by its COLOUR (saturated pixels in the brick's hue range): the largest such blob, weighted
+    toward the image centre, closed and hole-filled (a pen cross stays inside). Robust at 10 cm where depth is patchy.
+    For pink the red jaws have the same hue (175-179) and are included (in every photo alike); the orange wrist-camera mount (hue 1-7) is not. -> (mask, info) / (None, why)."""
+    if brick not in BRICK_HUES: return None, f"no colour range for brick '{brick}'"
+    H, W = img.shape[:2]; sm = cv2.resize(img, (W // s, H // s), interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(sm, cv2.COLOR_BGR2HSV); h = hsv[..., 0]; lo, hi = BRICK_HUES[brick]
+    inh = ((h >= lo) & (h <= hi)) if lo <= hi else ((h >= lo) | (h <= hi))
+    m = (inh & (hsv[..., 1] >= sat_min) & (hsv[..., 2] >= val_min)).astype(np.uint8)
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
+    n, lab, st, cen = cv2.connectedComponentsWithStats(m)
+    if n <= 1: return None, f"no {brick} blob in the picture"
+    hh, ww = m.shape; best, bs = 0, 0.0
+    for k in range(1, n):
+        d = np.hypot((cen[k][0] - ww / 2) / ww, (cen[k][1] - hh / 2) / hh)
+        sc = st[k, cv2.CC_STAT_AREA] * (1.0 - min(0.8, d * 1.2))            # big and near the centre wins
+        if sc > bs: best, bs = k, sc
+    area = int(st[best, cv2.CC_STAT_AREA])
+    if area < min_frac * hh * ww: return None, f"{brick} blob too small ({area * s * s} px)"
+    seed = lab == best
+    # a brightly lit brick face is paler (S ~ 170 < sat_min): grow the blob into connected same-hue pixels >= sat_weak
+    weak = (inh & (hsv[..., 1] >= sat_weak) & (hsv[..., 2] >= val_min)).astype(np.uint8)
+    weak = cv2.morphologyEx(weak, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    _, lab2 = cv2.connectedComponents(weak | seed.astype(np.uint8))
+    out = fill_holes(np.isin(lab2, np.unique(lab2[seed])).astype(np.uint8) * 255)
+    out = cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    return cv2.resize(out, (W, H), interpolation=cv2.INTER_NEAREST), {"z_mm": None, "area_px": area * s * s, "search": "colour", "brick": brick}
 
 
 def apply_mask(img, mask):
@@ -253,12 +417,18 @@ def inspect_crop(img, depth_mm=None, pad=0.08):
     """
     cfg = {"inhand_cfg": {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in INHAND.items()}}
     if TUNING: return img, {"masked": False, "why": "depth auto-tune running", **cfg}
-    if depth_mm is None: return img, {"masked": False, "why": "no depth", **cfg}
-    m, info = inhand_mask(depth_mm)
-    if m is None: return img, {"masked": False, "why": info, **cfg}
-    info = {**info, **cfg}
-    if m.shape[:2] != img.shape[:2]:
-        m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+    if INHAND.get("brick"):                      # colour mask of the named brick (robust at 10 cm, no depth needed)
+        m, info = brick_mask(img, INHAND["brick"])
+        if m is None: return img, {"masked": False, "why": info, **cfg}
+        info = {**info, **cfg}
+    else:
+        if depth_mm is None: return img, {"masked": False, "why": "no depth", **cfg}
+        m, info = inhand_mask(depth_mm)
+        if m is None: return img, {"masked": False, "why": info, **cfg}
+        info = {**info, **cfg}
+        if m.shape[:2] != img.shape[:2]:
+            m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        m = complete_mask(img, m)                # colour fills what depth missed on the glossy brick
     out = apply_mask(img, m)
     b = mask_bbox(m, pad)
     if b is None: return out, {"masked": False, "why": "empty mask"}

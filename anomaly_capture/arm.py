@@ -37,6 +37,7 @@ PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_{}-if00"
 FOLLOWER, LEADER = "5B3D040988", "5B14111392"
 HERE = Path(__file__).resolve().parent
 ROUTINES = HERE / "routines.json"
+GRIP_FLOOR = HERE / "gripper_floor.json"      # {"calibrated_min", "servo_min"}: written by Arm.set_grip_floor
 VMAX = 1500          # ticks/s at 100 % speed (~130 deg/s); every command is rate-limited to the current speed
 MIRROR_VMAX = 1200   # live leader following
 ENGAGE_VMAX = 250    # first 3 s of mirroring: creep to the leader's pose instead of jumping
@@ -65,7 +66,7 @@ class Stopped(Exception):
 class Arm:
     def __init__(self):
         self.f = self.l = None
-        self.fl = self.ll = None
+        self.fl = self.ll = None; self.g_floor = None
         self.io = threading.Lock()
         self.mode = "off"             # off | hold | limp | mirror
         self.pos, self.goal, self.cmd, self.lpos = {}, {}, {}, {}
@@ -91,6 +92,12 @@ class Arm:
             f.write("Protection_Current", "gripper", 250, normalize=False)
             f.write("Overload_Torque", "gripper", 25, normalize=False)
         self.fl = _limits(f)
+        self.g_floor = self.fl["gripper"][0]         # lowest gripper command the loop sends (see set_grip_floor)
+        try:
+            cal = json.loads(GRIP_FLOOR.read_text())["calibrated_min"]
+            if self.fl["gripper"][0] < cal:          # the servo was allowed to close past its calibrated end:
+                self.fl["gripper"] = (cal, self.fl["gripper"][1])      # every rule and normalisation keeps the calibrated one
+        except Exception: pass
         p = f.sync_read("Present_Position", normalize=False)
         f.sync_write("Goal_Position", p, normalize=False)    # hold exactly where it is: no jump on torque-on
         f.enable_torque()
@@ -98,6 +105,24 @@ class Arm:
         self.f, self.mode = f, "hold"
         threading.Thread(target=self._loop, daemon=True).start()
         return "follower connected, holding its current pose"
+
+    def set_grip_floor(self, extra):
+        """Let the gripper be COMMANDED `extra` ticks past its calibrated closed end (0 = back to the calibration).
+        Why: a block held across a thin side stalls the fingers only ~25 ticks above that end, so the clamp could
+        not squeeze it (the squeeze is the gap between command and position). Only the servo's Min_Position_Limit
+        changes; self.fl keeps the calibrated end, so grasp rules, leader mapping and dataset normalisation are
+        untouched. The gripper's torque limit / overload protection (connect) still bound the force.
+        The gripper goes limp for a moment (EEPROM needs torque off): call it with the clamp empty."""
+        if not self.f: raise RuntimeError("connect the arm first")
+        cal = int(self.fl["gripper"][0]); want = cal - max(0, min(250, int(extra)))
+        with self.io:
+            self.f.disable_torque("gripper")
+            self.f.write("Min_Position_Limit", "gripper", want, normalize=False)
+            self.f.enable_torque("gripper")
+            got = int(self.f.read("Min_Position_Limit", "gripper", normalize=False))
+        self.g_floor = got
+        GRIP_FLOOR.write_text(json.dumps({"calibrated_min": cal, "servo_min": got}, indent=1))
+        return got
 
     def set_mode(self, m, force=False):
         if not self.f: raise RuntimeError("connect the arm first")
@@ -175,7 +200,7 @@ class Arm:
                     if self.mode in ("hold", "mirror"):
                         step = v * dt * 1.05
                         for n in JOINTS:
-                            g = min(self.fl[n][1], max(self.fl[n][0], self.goal[n]))
+                            g = min(self.fl[n][1], max(self.g_floor if n == "gripper" else self.fl[n][0], self.goal[n]))
                             self.cmd[n] += max(-step, min(step, g - self.cmd[n]))
                         self.f.sync_write("Goal_Position", {n: int(round(c)) for n, c in self.cmd.items()},
                                           normalize=False)
@@ -371,7 +396,10 @@ def make_router(S, DATA, AVG, say_recent):
             else:
                 if dep is not None:
                     dp = d / f"{group}_{brick or 'nobrick'}_{view}_depth.png"; cv2.imwrite(str(dp), dep); files.append(dp)
-                    mask, dinfo = prep.inhand_mask(dep)
+                    if prep.INHAND.get("brick"): mask, dinfo = prep.brick_mask(f, prep.INHAND["brick"])   # colour mask
+                    else:
+                        mask, dinfo = prep.inhand_mask(dep)
+                        mask = prep.complete_mask(f, mask)
                     if mask is not None:
                         mp = d / f"{group}_{brick or 'nobrick'}_{view}_masked.jpg"
                         cv2.imwrite(str(mp), prep.apply_mask(f, mask), [cv2.IMWRITE_JPEG_QUALITY, 90]); files.append(mp)

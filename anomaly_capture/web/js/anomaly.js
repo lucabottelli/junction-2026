@@ -46,3 +46,34 @@ PAGE.anomaly={
  slow(s){if(!DEMO)renderS(s)},
 };
 })();
+
+/* Hand-feed capture (/feed/*): rest pose clamp open -> block in -> Close clamp -> photos at every WP2 pose -> back open.
+   Polls /feed/status every 500 ms while this page is shown. */
+(()=>{
+let F=null,sig='',imgN=-1,busyBtn=false;
+const NAME={idle:'Not started',moving:'Moving',ready:'Ready · put a block in',closing:'Closing the clamp',to_wp2:'To WP2',photo:'Taking photos',
+ returning:'Back to rest',stopped:'Stopped',error:'Error'};
+const CLS={ready:'ok',stopped:'err',error:'err',idle:'line'};
+const segH=(id,opts,cur,fn)=>setH(id,opts.map(o=>`<button class="${o==cur?'on':''}" ${F&&F.active?'disabled':''} onclick="${fn}('${o}')">${esc(o[0].toUpperCase()+o.slice(1))}</button>`).join(''));
+function render(){
+ if(!F)return;const s=JSON.stringify([F.state,F.msg,F.ok,F.cfg,F.active,F.n,F.photos,F.wp2_poses,F.connected,F.busy,F.counts,F.rest_taught]);if(s==sig)return;sig=s;
+ segH('an-fbrick',F.bricks,F.cfg.brick,'anBrick');setH('an-flabel',F.labels.map(o=>`<button class="${o==F.cfg.label?'on '+(o=='good'?'good':'bad'):''}" ${F.active?'disabled':''} onclick="anLabel('${o}')">${o=='good'?'Clean':'Anomalous (cross)'}</button>`).join(''));setH('an-ffolder',`saved to <span class=mono>training_images/front/inhand/${esc(F.cfg.label)}/</span>`);segH('an-frest',F.rests,F.cfg.rest,'anRest');
+ setH('an-fposes',F.wp2_poses.length?`${F.wp2_poses.length} · <span class=mono>${esc(F.wp2_poses.join(', '))}</span>`:'<span class="badge err">no WP2 pose taught</span>');
+ const c=(F.counts[F.cfg.brick]||{})[F.cfg.label]||0,cc=(F.counts[F.cfg.brick]||{})[F.cfg.label+'_crops']||0;
+ const st=`<span class="badge ${CLS[F.state]||'acc'}">${esc(NAME[F.state]||F.state)}</span>`;
+ setH('an-fmsg',`<div class=an-fhead>${st}<span class=an-fcount><span class=serif>${c}</span> ${esc(F.cfg.brick)} · ${esc(F.cfg.label)} photos <span class=muted>(${cc} usable crops) · handling ${F.n} this session</span></span></div>`
+  +`<div class="${F.ok?'ink2':'err'} an-ftext">${esc(F.msg)}</div>`
+  +(!F.connected?`<div class="callout warn">${ico('alert')}<span>The arm is not connected.</span><a class="btn sm" href="/waypoints">Connect</a></div>`:'')
+  +(!F.rest_taught?`<div class="callout warn">${ico('alert')}<span>Rest pose <b>${esc(F.cfg.rest)}</b> is not taught.</span><a class="btn sm" href="/waypoints">Teach</a></div>`:''));
+ setH('an-fphotos',F.photos.length?`<table class=an-ftab><thead><tr><th>Pose</th><th>Depth mask</th><th>Distance</th></tr></thead><tbody>`
+  +F.photos.map(p=>`<tr><td class=mono>${esc(p.view)}</td><td>${p.mask_ok?'<span class="badge ok">masked</span>':`<span class="badge err">no mask</span> <span class="muted small">${esc(p.why||'')}</span>`}</td><td class=num>${p.z_mm?p.z_mm+' mm':'–'}</td></tr>`).join('')+'</tbody></table>':'');
+ const moving=F.active;
+ $('an-fready').disabled=moving||!F.connected;$('an-fclose').disabled=moving||F.state!='ready';$('an-frelease').disabled=moving||!F.connected;
+ if(F.has_img&&F.n!=imgN){imgN=F.n;const im=$('an-flast');im.onload=()=>{im.dataset.ok='1'};im.src='/feed/last.jpg?t='+Date.now()}}
+function poll(){if(document.hidden||!CUR||CUR.slug!='anomaly')return;
+ fetch('/feed/status').then(r=>r.ok?r.json():null).then(x=>{if(x){F=x;render()}}).catch(()=>{})}
+function post(u){return fetch(u,{method:'POST'}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(x=>{F=x;render()}).catch(e=>toast('Request failed: '+e.message,'err'))}
+expose({anBrick:b=>post('/feed/cfg?brick='+b),anLabel:l=>post('/feed/cfg?label='+l),anRest:r=>post('/feed/cfg?rest='+r),
+ anReady:()=>post('/feed/ready'),anTilts:d=>post(d?'/feed/tilts?angles='+encodeURIComponent(d):'/feed/tilts?on=false'),anClose:()=>post('/feed/close'),anRelease:()=>post('/feed/release')});
+const prev=PAGE.anomaly.init;PAGE.anomaly.init=function(){prev.apply(this,arguments);setInterval(poll,500);poll()};
+})();

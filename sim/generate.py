@@ -182,8 +182,12 @@ class Randomizer:
 
 # ---------------------------------------------------------------------------- worker
 
+RULE = "random"  # target choice: "random" colour, or "nearest" = the brick closest to the robot
+
+
 def worker(args):
-    wid, seeds, out_dir, session = args
+    global RULE
+    wid, seeds, out_dir, session, RULE = args
     import mujoco
 
     import expert
@@ -200,7 +204,10 @@ def worker(args):
         rng = np.random.default_rng(seed)
         target = str(rng.choice(names))
         vis = rz.apply(rng)
-        sc.reset(rng, int(rng.choice([1, 2, 3], p=[0.5, 0.35, 0.15])), target)
+        if RULE == "nearest":  # pick the brick closest to the robot; more crowded plates since the rule is unambiguous
+            target = sc.reset_nearest(rng, int(rng.choice([1, 2, 3], p=[0.35, 0.35, 0.30])))
+        else:
+            sc.reset(rng, int(rng.choice([1, 2, 3], p=[0.5, 0.35, 0.15])), target)
         station.set_wrist_camera(model, data, {**cal, "wrist": vis["wrist"]})
         looks = {c: sample_look(c, rng) for c in CAMS}
         bgs = {c: (pools[c][rng.integers(len(pools[c]))] if pools[c] and rng.uniform() < 0.85 else None) for c in CAMS}
@@ -229,7 +236,7 @@ def worker(args):
         np.savez_compressed(d / "data.npz", t=np.arange(n) / expert.FPS, state=state, action=action, leader=action,
                             cam_age=np.zeros((n, len(CAMS)), np.float32), cams=np.array(CAMS))
         close = r["phase"].index("close") if "close" in r["phase"] else n
-        meta = {"episode": ep, "session": session, "source": "sim", "seed": int(seed), "brick": target,
+        meta = {"episode": ep, "session": session, "source": "sim", "seed": int(seed), "brick": target, "target_rule": RULE, "n_bricks": len(sc.placed()),
                 "label": "good", "fps": expert.FPS, "cams": CAMS,
                 "act_roi": {c: [0, 0, 640, 480] for c in CAMS}, "joints": station.JOINTS,
                 "follower_limits": cal["follower_limits"], "task": f"pick up the {target} brick",
@@ -251,10 +258,12 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=1000)
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--session", default="")
+    ap.add_argument("--rule", choices=["random", "nearest"], default="nearest",
+                    help="target: the brick closest to the robot (default, the user's rule) or a random colour")
     a = ap.parse_args()
     session = a.session or datetime.now().strftime("%Y%m%d_%H%M%S_sim")
     seeds = list(range(a.seed, a.seed + a.n))
-    chunks = [(i, seeds[i::a.j], a.out, session) for i in range(a.j) if seeds[i::a.j]]
+    chunks = [(i, seeds[i::a.j], a.out, session, a.rule) for i in range(a.j) if seeds[i::a.j]]
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(len(chunks)) as pool:

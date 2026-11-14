@@ -41,6 +41,8 @@ import policy as pol
 import prep
 from arm import BODY, TICK_PER_DEG, Stopped
 from collect import (HOLD_GAP, HOLD_MIN_OPEN, HOLD_STILL, HOLD_TIME, MATCH_DEG, MAX_PICK_S, REGRIP_SQUEEZE, TAIL_S)
+from collect import FPS as collect_FPS, REC_CAMS as collect_REC_CAMS
+from arm import JOINTS as arm_JOINTS
 from scorer import Scorer
 
 HERE = Path(__file__).resolve().parent
@@ -108,7 +110,7 @@ class Sorter:
         self.cur = {}; self.history = []; self.totals = {"good": 0, "defect": 0, "aborted": 0}
         self.photos = []; self.session = None; self.calib = {"running": False, "result": None}
         self._pol = None; self.clock = pol.RealClock(); self.act = None; self.act_info = None; self._roiw = (0, None); self.trials = []
-        self._vis = None; self._vdir = None
+        self._vis = None; self._vdir = None; self._vopt = None
 
     def save_cfg(self): self.cfg_path.write_text(json.dumps(self.cfg, indent=1))
     def say(self, m, ok=True): self.msg, self.ok = m, ok
@@ -235,9 +237,11 @@ class Sorter:
         cfg brick's colour if vision_colour is on), carry to WP1, still held? Same contract as pick_act."""
         vp, kin, cal = self.get_vision(); c = self.cfg
         self.state = "vision"; self.act_info = None
-        self.act = vp.VisionPick(self.A, self.C, self.S, kin, cal, retries=c["act_retries"], speed=c["act_speed"],
+        o = self._vopt or {}
+        self.act = vp.VisionPick(self.A, self.C, self.S, kin, cal, retries=o.get("retries", c["act_retries"]), speed=c["act_speed"],
                                  check=self.check, say=self.say, debug_dir=self._vdir,
-                                 target=c["brick"] if c.get("vision_colour") else None)
+                                 target=o.get("target", c["brick"] if c.get("vision_colour") else None),
+                                 on_event=o.get("on_event"), tuner=o.get("tuner"))
         self.act.tag = tag
         try:
             g_lock, self.act_info = self.act.run()
@@ -531,7 +535,7 @@ class Sorter:
             self.judge["img"] = None
             self.active = False; self.A.running = False; self.C.active = False
 
-    def act_test(self, n, put_back=True, mode="act"):
+    def act_test(self, n, put_back=True, mode="act", record=False, target=""):
         """Pick-only test of the ACT policy (no plates, no photos, no judging): n trials of start pose -> policy ->
         hand-off -> carry to WP1 -> still held? A held brick is put back on the plate (collector's put-back: new spot,
         turned), so the next trial starts from a new pose. A missed pick just goes back to the start pose and tries
@@ -542,18 +546,30 @@ class Sorter:
         self.session = datetime.now().strftime("acttest_%Y%m%d_%H%M%S")
         d = self.RUNS / self.session; d.mkdir(parents=True, exist_ok=True)
         (d / "settings.json").write_text(json.dumps({**self.cfg, "n": n, "put_back": put_back}, indent=1))
-        self.trials = []; self._vdir = d if mode == "vision" else None
+        self.trials = []; self._vdir = d if mode == "vision" else None; self._vopt = None
+        vrec = None
         try:
-            if mode == "vision": vp, kin, cal = self.get_vision()
+            if mode == "vision":
+                vp, kin, cal = self.get_vision()
+                self._vopt = {"target": target or None}
+                if record:
+                    vrec = VRecorder(self, n, d); self._vopt.update(retries=0, on_event=vrec.on_event, tuner=vrec.tuner)
             else: self.get_policy()
             home = C.wps("home")[0]["pos"]; wp1 = C.wps("wp1")[0]["pos"]; g_open = self.g_open()
             for i in range(1, n + 1):
                 self.check(); t0 = time.time(); err = None
+                if vrec: vrec.begin(i)
                 try:
                     g_lock = self.pick_vision() if mode == "vision" else self.pick_act(); ok = True
                 except pol.PickFailed as e:
                     ok, err = False, str(e)
+                    if vrec: vrec.end(False)
                     if not e.retry: raise
+                except BaseException:
+                    if vrec: vrec.end(False, discard=True)
+                    raise
+                else:
+                    if vrec: vrec.end(True, g_lock)
                 ai = self.act_info or {}
                 rec = {"trial": i, "ok": ok, "error": err, "t_s": round(time.time() - t0, 1),
                        "pick_s": (ai.get("attempts") or [{}])[-1].get("t_s"), "act": ai}
@@ -564,7 +580,8 @@ class Sorter:
                 k = sum(t["ok"] for t in self.trials)
                 self.say(f"trial {i}/{n}: {'PICKED' if ok else 'MISSED'} · {k}/{i} so far", ok)
                 if ok and put_back and mode == "vision":
-                    self.place_and_look(i, g_lock, home, g_open, d)
+                    seen = self.place_and_look(i, g_lock, home, g_open, d)
+                    if vrec: vrec.verify(seen)
                 elif ok and put_back:
                     C.reset(home, wp1, C.slot("drops"), self.act.grasp_pose or dict(A.cmd), g_lock, g_open, False)
                     C.state = "idle"
@@ -615,7 +632,8 @@ class Sorter:
                 new, txt = vp.refit(cal)
                 if new is not None: self._vis[2] = new
                 self.say(f"calibration {txt}")
-        C.state = "idle"
+            C.state = "idle"; return True
+        C.state = "idle"; return False
 
     # ------------------------------------------------------------------ threshold calibration (same path as runtime)
     def _episode_of(self):
@@ -680,6 +698,71 @@ class Sorter:
                         "roi_warning": self.roi_warning() if self.cfg["pick"] == "act" else None}}
 
 
+class VRecorder:
+    """Records each vision pick as an episode in the teleop format (collect.py's own _record / _write), so the robot
+    builds its own pick dataset: episodes/<time>_vpick/epNNNN_<time>/{top,wrist,front}/*.jpg + data.npz + meta.json.
+    One attempt = one episode, from the start pose (recording starts when the grasp is planned) to WP1.
+    outcome = success (still held at WP1) / missed; verified = the brick was seen where the arm set it down after."""
+    def __init__(self, T, n, run_dir):
+        self.T, self.C, self.A = T, T.C, T.A
+        self.session = datetime.now().strftime("%Y%m%d_%H%M%S") + "_vpick"
+        self.dir = self.C.EP / self.session; self.dir.mkdir(parents=True, exist_ok=True)
+        # target 0: the Record page must not offer to RESUME this session with the leader arm
+        (self.dir / "session.json").write_text(json.dumps({"brick": "mixed", "label": "good", "target": 0, "planned": n,
+            "source": "vpick", "run": run_dir.name, "started": datetime.now().isoformat(timespec="seconds")}, indent=1))
+        self.buf = None; self.writer = None; self.last = None; self.n_ok = 0
+        try:
+            from grasp_tuner import Tuner
+            self.tuner = Tuner.load()
+        except Exception:
+            self.tuner = None
+
+    def begin(self, i):
+        self.i = i; self.buf = None; self.stop = None; self.th = None; self.handoff = None; self.info = {}
+
+    def on_event(self, name, info):
+        if name == "start":
+            self.info = info; self.t0 = time.time()
+            self.buf = {k: [] for k in ("t", "frames", "age", "state", "action", "leader")}
+            self.stop = threading.Event()
+            self.th = threading.Thread(target=self.C._record, args=(self.buf, self.stop), daemon=True); self.th.start()
+        elif name == "grasped" and self.buf is not None:
+            self.handoff = len(self.buf["t"]); self.pick_s = round(time.time() - self.t0, 2)
+
+    def end(self, ok, g_lock=None, discard=False):
+        if self.buf is None: return                          # nothing was planned (no brick seen): no episode
+        self.stop.set(); self.th.join(1)
+        buf, A, info = self.buf, self.A, self.info; self.buf = None
+        brick = info.get("brick") or "brick"; ep = f"ep{self.i:04d}_{datetime.now().strftime('%H%M%S')}"
+        try:                                                 # the tuner logs every result, even while it is disabled
+            if self.T.act is not None and self.tuner is not None and not discard:
+                self.tuner.update(self.T.act.tune, bool(ok), info={"episode": f"{self.session}/{ep}", "verified": None,
+                                  **{k: info.get(k) for k in ("n_bricks", "touch_mm", "tcp_err_mm", "g_stall")}})
+        except Exception: pass
+        if discard or len(buf["t"]) < 5: return
+        buf["leader"] = [list(a) for a in buf["action"]]     # no leader arm: the command is the demonstration
+        n = len(buf["t"])
+        meta = {"episode": ep, "session": self.session, "brick": brick, "label": "good", "fps": collect_FPS,
+                "cams": collect_REC_CAMS, "act_roi": self.C.cfg["act_roi"], "joints": list(arm_JOINTS),
+                "follower_limits": A.fl, "leader_limits": getattr(A, "ll", None), "task": f"pick up the {brick} brick",
+                "phase1": "scripted vision pick (vpick.py) + automatic carry to WP1", "source": "vpick",
+                "start": datetime.fromtimestamp(self.t0).isoformat(timespec="seconds"),
+                "pick_s": getattr(self, "pick_s", None) if self.handoff else None,
+                "handoff_frame": self.handoff if self.handoff else n, "handoff": "vpick", "grasp_attempts": 1,
+                "n_frames": n, "wp1_frame": n - 1, "outcome": "success" if ok else "missed",
+                "n_bricks": info.get("n_bricks"), "grasp": {k: info.get(k) for k in ("px", "angle", "xyz", "yaw", "width_mm", "clear_mm", "tune", "touch_mm", "tcp_err_mm", "g_stall")}}
+        if ok: meta["gripper_lock"] = round(float(g_lock), 1); self.n_ok += 1
+        self.last = self.dir / ep
+        self.writer = threading.Thread(target=self.C._write, args=(self.last, buf, meta), daemon=True); self.writer.start()
+
+    def verify(self, seen):
+        """After the put-back: was the brick really in the gripper (seen where the arm set it down)?"""
+        try:
+            self.writer.join(20); m = self.last / "meta.json"
+            j = json.loads(m.read_text()); j["verified"] = bool(seen); m.write_text(json.dumps(j, indent=1))
+        except Exception: pass
+
+
 def make_router(S, A, ctx, C, DATA, ROOT):
     T = Sorter(S, A, ctx, C, DATA, ROOT)
     r = APIRouter()
@@ -719,7 +802,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
         time.sleep(0.1); return T.status()
 
     @r.post("/sort/act_test")
-    def act_test(n: int = 1, put_back: bool = True, mode: str = "act"):
+    def act_test(n: int = 1, put_back: bool = True, mode: str = "act", record: bool = False, target: str = ""):
         """Pick-only ACT test (see Sorter.act_test): needs home + wp1 and a policy export, nothing else."""
         def bad(m): T.say(m, False); return T.status()
         if T.active or C.active or A.running: return bad("busy: STOP the running job first")
@@ -736,7 +819,9 @@ def make_router(S, A, ctx, C, DATA, ROOT):
                 miss = [c for c in d.get("cams", []) if c not in S.live]
                 if miss: return bad(f"the ACT policy needs camera {', '.join(miss)}, which is not live")
             except Exception as e: return bad(f"pick = ACT: {e}")
-        threading.Thread(target=T.act_test, args=(max(1, min(200, n)), put_back, "vision" if mode == "vision" else "act"), daemon=True).start()
+        if target not in ("", "random", "pink", "green", "blue"): return bad("target must be random, pink, green or blue (empty = nearest brick)")
+        threading.Thread(target=T.act_test, args=(max(1, min(500, n)), put_back, "vision" if mode == "vision" else "act",
+                                                  bool(record) and mode == "vision", target), daemon=True).start()
         time.sleep(0.1); return T.status()
 
     @r.get("/sort/policies")

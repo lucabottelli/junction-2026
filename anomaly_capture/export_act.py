@@ -26,6 +26,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 EP = ROOT / "episodes"
+EPS = [EP]
 STUDIO_SRC = Path.home() / "physical-ai-studio/application/backend/src"
 API = "http://127.0.0.1:7860/api"
 JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
@@ -64,6 +65,15 @@ def plan(meta, d, a, args):
     act = d["action"].astype(np.float64)
     body = slice(0, 5)
     act_s = act.copy(); act_s[:, body] = gauss_smooth(act[:, body], args.smooth)
+    # gripper start fix (old teleop sessions): the leader rested SHUT while the follower started open, so the recorded
+    # command said "close" from frame 0 and the policies learned to close early. Until the human first opens the leader,
+    # the gripper action is kept at least as open as the follower really was. Recordings that already start open
+    # (tDataset2) are unchanged.
+    if not args.no_gripper_fix:
+        g, sg = act[:, 5], d["state"][:, 5].astype(np.float64)
+        rise = np.nonzero(g > g[0] + 40)[0]                       # first time the human opens the leader
+        k = int(rise[0]) if rise.size else 0
+        act_s[:k, 5] = np.maximum(g[:k], sg[:k])
     deg = act_s[:, body] / TICK_PER_DEG
     # 2. trim idle start
     moved = np.nonzero(np.abs(deg - deg[0]).max(1) > 1.5)[0]
@@ -97,7 +107,7 @@ def plan(meta, d, a, args):
 
 def load_episodes(args):
     eps, rej = [], []
-    for md in sorted(EP.glob("*/*/meta.json")):
+    for md in sorted(m for ep_dir in EPS for m in ep_dir.glob("*/*/meta.json")):
         m = json.loads(md.read_text()); d = md.parent; name = f"{d.parent.name}/{d.name}"
         if args.sessions and d.parent.name not in args.sessions: continue
         if args.bricks and m.get("brick") not in args.bricks: continue
@@ -128,7 +138,7 @@ def studio_ids():
 
 
 def main():
-    global EP
+    global EP, EPS
     ap = argparse.ArgumentParser()
     ap.add_argument("--speedup", type=float, default=1.5)
     ap.add_argument("--max-attempts", type=int, default=1)
@@ -140,19 +150,20 @@ def main():
     ap.add_argument("--bricks", nargs="*"); ap.add_argument("--sessions", nargs="*")
     ap.add_argument("--name", default=""); ap.add_argument("--task", default="", help="override the per-episode task (default: 'pick up the <brick> brick')")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--episodes", default=str(ROOT / "episodes"), help="raw episodes folder")
+    ap.add_argument("--episodes", action="append", default=[], help="raw episodes folder; repeatable (default ~/junction26/episodes)")
     ap.add_argument("--sim-episodes", default="", help="also export simulated episodes from this folder (sim/generate.py)")
     ap.add_argument("--sim-max", type=int, default=0, help="at most this many sim episodes (0 = all)")
+    ap.add_argument("--no-gripper-fix", action="store_true", help="keep the recorded gripper action at the start as it is")
     ap.add_argument("--real-repeat", type=int, default=1, help="write each real episode this many times (weights real vs sim)")
-    ap.add_argument("--exclude", default="", help="file of <session>/<episode> names to leave out, one per line, optional '# reason'"
-                    " (e.g. ~/junction26/qualia_exclude.txt from the Qualia checks)")
+    ap.add_argument("--exclude", action="append", default=[], help="file of <session>/<episode> names to leave out, one per"
+                    " line, optional '# reason'; repeatable (e.g. ~/junction26/qualia_exclude.txt, ~/junction26/nearest_rule_exclude.txt)")
     args = ap.parse_args()
     args.exclude_set = {}
-    if args.exclude:
-        for ln in Path(args.exclude).expanduser().read_text().splitlines():
+    for ex in args.exclude:
+        for ln in Path(ex).expanduser().read_text().splitlines():
             nm, _, why = ln.partition("#")
-            if nm.strip(): args.exclude_set[nm.strip()] = f"excluded: {why.strip() or args.exclude}"
-    EP = Path(args.episodes)
+            if nm.strip(): args.exclude_set.setdefault(nm.strip(), f"excluded: {why.strip() or ex}")
+    EPS = [Path(e).expanduser() for e in (args.episodes or [str(ROOT / "episodes")])]; EP = EPS[0]
 
     eps, rej = load_episodes(args)
     print(f"{len(eps)} episode(s) accepted, {len(rej)} rejected")

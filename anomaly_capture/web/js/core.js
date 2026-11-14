@@ -46,7 +46,7 @@ function epStats(c){const all=[];((c||C||{}).sessions||[]).forEach(se=>se.episod
  used.forEach(e=>per[e.block]=(per[e.block]||0)+1);all.forEach(e=>per[e.block]=per[e.block]||0);
  return {all,succ,used,per,blocks:Object.keys(per).sort()}}
 /* waypoint slots a recording run needs with the current options */
-function wpRequired(){const c=(C&&C.cfg)||{},r=['home','wp1'];if(c.phase2)r.push('wp2_above','wp2');if(c.phase2&&c.regrasp)r.push('tape_above','tape_place');return r}
+function wpRequired(){const c=(C&&C.cfg)||{},r=['home','wp1'];if(c.phase2)r.push('wp2');if(c.phase2&&c.regrasp)r.push('tape_above','tape_place');return r}
 function camsLive(){if(!S)return{live:0,n:0,bad:[]};const cams=S.cams||[],bad=cams.filter(k=>!(S.live||[]).includes(k)||(S.age||{})[k]>2);return{live:cams.length-bad.length,n:cams.length,bad}}
 
 /* ---------- the journey: live status of every step ---------- */

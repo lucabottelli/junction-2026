@@ -596,6 +596,50 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Verified:** `make test` 185 passed / 3 skipped (was 72), `make test-flows` 15/15, `sim_test.py` passes; two independent reviews (findings above fixed, each with a regression test). **Not verified:** RealSense advanced mode on the real D415 (re-enumeration time, live depth-table changes), the real fx/baseline, the mask thresholds on real depth, and the re-grip on the real arm. The mock still has symmetric jaws, so it can't reproduce the fixed-jaw failure.
     - **Station checks, in order:** restart the tool → log shows `front depth: 424x240 …` and no warning → `/depth/status` → brick at WP2 → Auto-tune depth → `mask_ok` at every WP2 pose → one capture, look at `_masked.jpg`. Then Waypoints → Step by step re-grip → STOP after "lifted" → teach `tape_regrip` by mirroring → card shows roll ±90°, pan ≈ 0 → Step by step again → plain Test re-grip.
 
+
+32. **Several bricks on the plate: always pick the brick CLOSEST TO THE ROBOT** (2026-11-14 ≈19:40, the user's decision).
+    - **Why:** ACT has no language input. Sim evaluation of the first ACT model (`5d03db18`):
+      - target alone on the plate: 7/13;
+      - 2–3 bricks: 1/17.
+      The demos picked different colours in similar-looking scenes, so the policy hovers between bricks. A fixed spatial rule makes every demo agree. The station then picks, inspects and sorts the nearest brick, and repeats until the plate is empty.
+    - **Sim:**
+      - `expert.Scene.reset_nearest` makes the target the brick with the smallest distance to the robot base (origin, table plane). Layouts where the two nearest are within 1.5 cm are redrawn.
+      - `generate.py --rule nearest` is now the default. Plates are more crowded (1/2/3 bricks at 35/35/30 %), and the rule plus `n_bricks` go into each episode's meta.
+      - `evaluate.py --rule nearest` (default) reports success by brick count.
+      - Expert with the rule: 51/60 (85 %), 16/19 with 3 bricks.
+    - **Real picks:** every real demo had 2–4 bricks on the plate, and the target was the session's colour.
+      - `sim/real_nearest.py` checks each episode's first top frame:
+        - detects the bricks by colour, only inside the detected orange plate;
+        - tells pink from glare by saturation: brick S≈134, glare 76–101;
+        - projects each brick through the calibrated top camera onto the table and compares distances to the base.
+      - Only 13 of 86 follow the rule; 13 more couldn't be checked (target not detected).
+      - The rest go into `~/junction26/nearest_rule_exclude.txt` (79 lines).
+      - With the Qualia list as well, **12 real picks remain (green 8, pink 4, blue 0)**.
+    - **`export_act.py --exclude` is repeatable:** `--exclude ~/junction26/qualia_exclude.txt --exclude ~/junction26/nearest_rule_exclude.txt`.
+    - **New real picks must follow the rule:**
+      - Put 1–3 bricks on the plate and always pick the one closest to the robot.
+      - Name the session after the brick you actually pick.
+      - Record them with "Front-camera photos at WP2" on, so they also give the anomaly photos.
+      - Aim for about 15–20 per colour.
+    - **Next ACT round:** `gen4` (`--rule nearest`, about 700 attempts), the rule-following real picks, and 6 epochs on the A100 with 16 cores. The run waits until the real-arm test of `5d03db18` is done, so EGL rendering doesn't compete with the policy on the Intel GPU.
+    - **Real-arm test of `5d03db18`** (intel-2f, ≈19:35): **0/10** with one pink brick.
+      - A false lift hand-off was fixed in `policy.py`.
+      - After that the arm reached the plate and closed twice beside the brick, or went straight into the carry with the gripper shut.
+      - Inference: 11 ms p50.
+    - **Root cause found in the sim calibration** (≈19:45):
+      - The first fit (`calib.py`) used the 03:25 episode, whose top `act_roi` was the FULL frame (centre 4:3 crop).
+      - Every training session since 12:42 uses `act_roi` top = [388, 113, 1677, 1080].
+      - So **the sim top view never matched the real training images**: different zoom and framing, and the plate about 4–5 cm off. It was also fitted on only 6 points.
+    - **New hand-eye calibration from real grasps:**
+      - `sim/handeye_fit.py` pairs the target brick pixel (first top frame) with the follower FK at the grasp. The grasp is the lowest TCP in the 4 s before hand-off; the hand-off fires after the lift.
+      - Pixel→xy homography: 78 episodes, 52 inliers, leave-one-out **7.5 mm median / 10.7 mm p90**. Saved to `sim/calib/handeye.json`; intel-2f uses it for the scripted vision+IK pick.
+      - `sim/calib_handeye.py` refits the sim top camera on the same grasps with strong top-down and height priors: rms 44 → 11 px, table error 8 mm median. Plates re-measured in the crop view; orange is now (0.184, 0.132), r 0.0975 (was 0.21, 0.117, r 0.069).
+      - The old fit is kept at `sim/calib/calibration_v1_6keypoints.json`. Sim and real overlays now line up for the plates and the arm (grasp and WP1).
+      - The joint map is still not fitted per joint: the old raised-arm keypoints disagree by 30–80 px. FK is trustworthy near the plate only, and the homography absorbs this.
+    - **Expert with the new geometry and the nearest rule:** 55/60 (92 %).
+    - **Old sim data archived** (old calibration): `episodes_sim_old/gen3_old_calibration_random_rule`, `gen4_old_calibration`.
+    - **`gen5` started 19:46:** 750 attempts, seed 4000000, `--rule nearest`, nice 19, `-j 8`.
+
 33. **Real-arm test of the ACT pick, a pick-only test tool, and a scripted vision pick started and parked** (2026-11-14 ≈19:30–20:00, intel-2f).
     - **Pick-only test:** `POST /sort/act_test?n=5[&put_back=1]` (`sorter.act_test`). The full `/sort` cycle can't start before the plates are taught, so this runs only: start pose → policy → hand-off → carry to WP1 → still held?
       - A held brick is put back with the collector's put-back (new spot, turned). A miss opens the gripper and goes back to the start pose.
@@ -618,6 +662,62 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - Tested only offline (detector on 35 demo frames, the whole sequence on a fake arm). `pick = vision` and `/sort/act_test?mode=vision` exist but are untested on hardware.
     - **Mistake to avoid:** I ran `git stash` to compare test results while two other sessions had uncommitted edits in the tree. It was restored within about 10 s, but never stash, checkout or reset in this shared tree.
 
+
+34. **The robot records its own pick dataset; SmolVLA becomes the final pick model** (2026-11-14 ≈21:15, the user's decision; ACT is parked).
+    - **Why:**
+      - Real-arm ACT tests of `a87d9501` (quick run, crop-matched sim):
+        - 1 brick: 0/5, then 1/5;
+        - 3 bricks: trial 1 missed, trial 2 STOPPED by the user.
+      - Traces: the gripper's lowest point was the same spot every trial ((186–191, 121–130) mm) while the brick was at (219, 161). It succeeds only when the brick happens to lie there.
+      - Open-loop probe (`sim/probe_policy.py`): on sim frames it aims at the brick to 7–9 mm (corr 0.99, also on unseen scenes); on real frames it doesn't. **It learned sim-specific appearance**, and more sim won't fix that.
+      - The real teleop data was thin after the nearest-rule filter (12).
+    - **SmolVLA** (Studio policy `smolvla`, base `lerobot/smolvla_base`, SmolVLM2-500M, public weights) reads the task, so "pick up the <colour> brick" with distractors is valid. All clean real picks count again (69 after Qualia), and the nearest rule isn't needed.
+    - **Self-recording loop** (intel-2f, `vpick.py` + `sorter.py`): `POST /sort/act_test?mode=vision&record=1&target=random&n=N`.
+      - Scripted vision pick: detection, hand-eye fit about 7 mm, IK.
+      - Each attempt is recorded as an episode in the teleop format: `episodes/<time>_vpick/`, `source: "vpick"`, task = target colour.
+      - Reward = still held at WP1 (+ `verified` = seen where it was set down).
+      - Random put-back and hand-eye refit from the robot's own placements.
+      - **Not yet run on the real arm:** needs a 15–20 min shakedown (grasp height, jaw clearance) and the user's go.
+    - **Learning layer:** `anomaly_capture/grasp_tuner.py`, a factorized Thompson-sampling bandit (the simplest RL).
+      - It tunes per colour: grasp depth, jaw-axis shift, yaw offset, opening margin, descent speed.
+      - On a synthetic station: 30–70% → 82–92% success within 150 picks (`tests/test_grasp_tuner.py`).
+      - **Disabled** until the base pick works (`python grasp_tuner.py --enable`). Results are recorded from trial 1.
+    - **Training data for SmolVLA:**
+      - vpick episodes with outcome success (and `verified` != false);
+      - the 69 clean real teleop picks;
+      - sim 0–20 % at most.
+    - **SmolVLA trial run** (pipeline check): dataset `real69-smolvla-trial` (`4f0b0852`), job `ff382962`, A100, 1500 steps.
+    - **First real-arm SmolVLA tests (2026-11-14 22:24–22:28): 0/6.** Model `2ab68eb4` (≈3,900 steps, chunk 50, OpenVINO on GPU, 92–96 ms per inference, speed 0.5), 3 bricks on the orange plate, `/sort/act_test?n=3`.
+      - Task "pick up the pink brick" (`runs/acttest_20261114_222421`): 0/3. Task "pick up the green brick" (`runs/acttest_20261114_222659`): 0/3. Every trial: "closed on nothing".
+      - **The gripper never opens:** it starts at 2412 ticks and only closes (commanded 1890–2300 of the 1875–3395 range), so it can't get around a brick.
+      - **It doesn't aim at the named brick:** green lay at (125, 88) mm; the gripper's lowest points were (163, 101), (164, 124), (189, 76), i.e. 40–65 mm away and 26–54 mm above the table. The pink run ended in the same area ((169–232, 99–105)), which is also where ACT `a87d9501` went.
+      - Trials end after 3–7 s through the lift rule, not the 30 s timeout.
+      - Note: `vpick_calib.json` pixels are full resolution (1920×1080); `/snap` images are 640×360 (×3).
+
+
+35. **New pick dataset in `~/junction26/tDataset2`: all three blocks on the plate, one target colour per session, trained per block** (2026-11-14 ≈22:25, the user's decision).
+    - **Why:** SmolVLA trial `2ab68eb4` (69 old real picks, about 3,900 steps; val/loss best at epoch 3, then overfitting) went 0/3 on the real arm.
+      - Plans were jittery: the commanded position jumped > 8 mm between 33 ms ticks on 56–69 % of ticks. That's the flow-matching sampling of an undertrained model, plus a jump at every chunk switch.
+      - It went down 3–5 cm away from the pink brick.
+      - It commanded the gripper closed from step 0, learned from the teleop demos where the leader rests shut at the start.
+      - Speed on the Intel GPU is fine: about 71 ms per 50-action chunk.
+    - **Recorder:** new key `episodes_dir` in `anomaly_capture/collect_settings.json`, read once at start by `collect.Collector`. Set to `~/junction26/tDataset2`; 7870 restarted ≈22:28. Teleop sessions and the vpick self-recording (`C.EP`) both write there. The Episodes page shows only that folder now; the old `episodes/` stays as it is. `tDataset2/` is in `.gitignore`.
+    - **Recording:** all 3 blocks on the plate, Block = the colour picked in that session (task "pick up the <colour> brick"), at least 30–50 per block, layout varied.
+    - **Export per block:** `export_act.py --episodes ~/junction26/tDataset2 --bricks <colour>`. The export also gets a gripper-start fix: the early gripper action is kept at least as open as the follower until the human opens it.
+    - **Recorded 22:33–23:11:** pink 20/30, blue 20/29, green 20/29 successes (the rest missed or discarded), 7.5 GB. The leader now starts OPEN (≈2407 ticks = follower), so the start-closed gripper quirk is gone in this data.
+    - **Qualia:** `junction-tdataset2-real60` (upload `c7eccd87…`).
+      - Ingest 60/60 ok. Task names confirmed.
+      - episode-rules raised 7 flags; none was a "recommended" gripper flicker.
+      - **5 rejected** (≥ 2 corrections near the grasp ×4, end-pose outlier ×1), listed in `tDataset2/qualia_exclude.txt` and rejected on the upload.
+      - Index map: `tDataset2/qualia_index.txt`.
+      - Result: **55 clean** (pink 20, blue 17, green 18).
+    - **Exporter:**
+      - `--episodes` is repeatable.
+      - Gripper-start fix by default (`--no-gripper-fix` to skip): until the human first opens the leader, the gripper action is kept ≥ the follower's opening. This fixes the old sessions; tDataset2 is unaffected.
+    - **The top view is unchanged** vs the 15:00 sessions (plates and base in the same place; the front tripod now shows at the lower left), so the old clean picks can be combined.
+    - **Training (≈23:30):** one SmolVLA on **124 clean real picks** (blue 40, green 46, pink 38: old 69 + tDataset2 55), dataset `real124-smolvla`, A100, 5 epochs. One model with the colour instruction rather than three per-block models: each block has only about 40 demos, and the shared approach/grasp/lift skill benefits from all 124.
+
+
 ---
 
 ## 5. Issues and fixes log
@@ -638,6 +738,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 | 11 | 11-14 ≈02:10 | User frustrated with auto-capture; then the front preview looked frozen | Auto mode was too complex and unreliable. The page held 6 never-ending MJPEG streams, at the browser's ~6-connections-per-host limit, so one feed could starve. A camera read error also silently killed that camera's thread. | **Simplified to manual only:** one click = one capture from all cameras, never refused (no brick → the whole area is saved, flagged `brick_found: false` in meta), clicks are queued and never dropped, auto mode removed. Previews are now refreshed snapshots with no open connections. Camera threads catch errors and **reconnect after 3 s without frames**, and the page shows "FROZEN … auto-reconnecting" with frame age per camera. |
 | 12 | 11-14 ≈03:25 | Tape-spot 90° re-grip doesn't work on the real arm | Not diagnosed yet. Candidates: `tape_place` too high or too low (the block tilts or drops when released), gripper not open wide enough for the turned block, block not centred under the fingers after the turn, or the turned block too wide for the gripper | Disabled by default (decision 19). To debug later with the "test re-grip" button, watching each step. 04:30: the re-grip now opens to 90 % and closes until the fingers stall (decision 20), which covers the two width-related candidates; not yet retried on the arm. 18:30: likely cause found (one fixed jaw, decision 31): optional taught `tape_regrip` pose, step-by-step test with logs, coverage-safe retry; not yet tried on the arm |
 | 13 | 11-14 ≈16:45 | In-hand front photo: the depth mask keeps the wrong object | The only real WP2 capture (`training_images/front/inhand/good/20261114_032612_113_blue_wp2-1`) holds the brick so close to the front D415 (≈ 475 px across) that it is inside the depth camera's minimum range: only 9 % of the brick area has depth (24 % of the whole frame). `inhand_mask` therefore kept a small blob at the top of the image and greyed out the brick. Every live held photo would come back as "no depth mask" → uncertain → defect plate. Measured brick size per camera (crops of the same blue 2×2): top ≈ 60–70 px, wrist ≈ 100–120 px (yellow cast, dark, blur), front on the table ≈ 250–300 px. Top camera: 34 reconnects since start. | Fixed in code, not yet on the camera (decision 31): front depth at 424×240 + optional disparity shift with auto-tune; `inhand_mask` refuses implausible clusters instead of masking the wrong object |
+| 14 | 11-14 ≈21:45 | Front camera moved higher: everything tied to its old position is stale | The user raised the front D415 so the arm can articulate freely at WP2 and the camera can see the brick's hollow bottom after a 180° wrist roll (flex alone reaches only −17° to +1° finger elevation at WP2). Measured from two 21:14 photos: the block shifts ≈ 11 mm sideways under roll 180, opposite to the sim model (the model's gripper is mirrored: TCP +15 mm on the wrong side). The last three masks also included the red jaws and a strip of orange tape (colour mask). | Old depth background cleared at 21:45 so it can't be used by mistake (backups: `anomaly_capture/front_depth_bg.before_front_move.png`, `cam_settings.before_front_move.json`). **To redo after the move, in order:** restart the capture tool (front depth dropped to colour-only on the unplug) → set the front crop (ROI) → store the depth background (arm parked away from WP2) → re-teach WP2 + `wp2_above` → brick held at WP2 → Auto-tune depth → check `mask_ok` and one `_masked.jpg` per WP2 pose → then exclude jaws and tape from the colour mask. Old front in-hand photos don't match the new view. **21:57:** camera in place, the user taught three new WP2 poses by hand (wrist flex 2194 / 889 / 2874, block ≈ 17 cm above the table); new depth background stored (84 % valid, all shifts; the arm at home is in it at ≈ 350–480 mm). Still open: front crop, auto-tune with a brick at `wp2-1`, jaws/tape in the colour mask. Until then the depth window is 75–174 mm and photos use the colour mask. **22:10, first photos at the new position (21:59, pink):** the held brick is 115–135 mm from the camera, inside the depth window, but only 15–50 % of it has depth, so the colour mask stays the one in use and auto-tune is optional. `wp2-2` shows the hollow bottom well. `wp2-3` is cut off by the bottom frame edge (only the top studs visible) and `wp2-1` touches it: re-teach both higher. Colour mask fixed in `prep.brick_mask`: a brightly lit brick face (saturation ≈ 170) was dropped at `wp2-2`, now kept by growing into connected same-hue pixels ≥ 140; pink/red hue range narrowed to 168–1, which drops the orange wrist-camera mount (hue 1–7) at `wp2-3`. The red jaws stay in the mask: same hue as the pink brick (175–179), can't be split by colour. Checked on all 9 front in-hand photos; 194 tests pass. Front crop set to [750, 280, 1700, 1080]. Loaded by the ≈22:07 restart. **22:08 handling:** all three masks correct (lit face kept, no orange mount); the computed `wp2-3` (halfway between poses 1 and 2) is fully in frame. Left: `wp2-1` still cut by the bottom edge (raise 10–15 mm); the `wp2-3` photo is ghosted, the arm was probably still settling during the 16-frame average. **22:13 handling: passes.** `wp2-1` raised 12 mm, `wp2-3` recomputed, and the feed now waits for the joints to stop before each photo: the whole brick is in frame at all three poses, no ghosting, masks hold only brick + jaws. Only the jaw tips touch the bottom edge at `wp2-1`. Front in-hand photos before 22:13 are from older poses or framing: keep them out of training. **23:17:** all front in-hand photos so far (42 poses × 4 files, 21:14–22:20, plus `meta.jsonl`) uploaded to the private HF dataset as `stills/training_images_inhand_20261114_2220.tar` (93 MB, size checked). `unpack.py` only restores `stills/training_images.tar`; untar this one by hand into `~/junction26`. |
 
 ---
 
@@ -702,6 +803,12 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - 20,488 steps take about 65 min, for about $3.50/h (A100 $2.50 + 16 cores ≈ $0.75 + memory) ≈ **$4 per run**.
     - The dataset was still on the Modal volume, so the upload was skipped and training started 2.5 min after submit.
     - It isn't 2×, so the GPU and the main process now share the limit. 32 cores would probably add little: the API caps `num_workers` at 16.
+  - **Finished 19:10.** 20,488 steps, no preemption. The container scaled down by itself (0 left).
+    - Model `5d03db18-3f04-41c9-88be-0ec3a5dec7b4` (1.2 GB) with exports torch, onnx, **openvino**, executorch.
+    - val/loss per epoch: 0.271 → 0.233 → 0.221 → **0.217**. Still improving slightly at epoch 4, so 6 epochs might help a little.
+    - Sim evaluation: `sim/evaluate.py --backend openvino --device GPU -n 30` → `sim/eval/20261114_191137/`.
+      - First looks: pink alone, picked to WP1 in 5.5 s. Green with 3 bricks on the plate, hovers and times out.
+      - ACT has no language input, so it can't choose a colour on a crowded plate.
 
 ### NPU: user-space driver missing
 - **Install it** (needs sudo):
@@ -750,7 +857,7 @@ Everything below was built and tested without hardware. Nothing has run on the r
 
 1. [x] Mount the overhead D415 above the workspace (done; about 66 cm, top-down). The setup has been locked since 2026-11-14 ≈01:15.
 2. [ ] Add a read-only Hugging Face token in Settings → General → Hugging Face.
-3. [ ] Install the NPU driver (§6).
+3. [x] Install the NPU driver (§6). Done: OpenVINO lists CPU, GPU, NPU (checked 2026-11-14 18:32).
 4. [ ] Get the **kickoff details**: the objects, the defects and the sorting rules.
 5. [ ] **Now: phases 1 + 2 (decision 16).**
    1. [ ] On `/arm`, teach `home`, `wp1`, `wp2` and `drops`. TEST RUN each slowly.
@@ -806,7 +913,9 @@ Everything below was built and tested without hardware. Nothing has run on the r
 
 | Model | Device | Precision | Latency per step | Cycle time | Power | Temperature | Notes |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| ACT `act-pick-sim610-real69x2-qualia` (export 5d03db18, OpenVINO, chunk 100, cams top+wrist) | GPU | export default | 7.8 ms p50 / 9.2 ms p95 | – | – | – | `policy.py --bench 20`, 2026-11-14 19:31, no arm. Loads via physicalai in 1.2 s; inputs `images.top`, `images.wrist` + state, as assumed in decision 23 |
+| same | NPU | export default | 10.2 ms p50 / 15.1 ms p95 | – | – | – | loads in 1.7 s |
+| same | CPU | export default | 81.9 ms p50 / 89.6 ms p95 | – | – | – | loads in 0.6 s |
 
 ---
 

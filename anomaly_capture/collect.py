@@ -136,6 +136,10 @@ class Collector:
                     "release_ticks": RELEASE_TICKS, "regrip_contact_deg": 0.0, "step_timeout_s": STEP_TIMEOUT_S}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
+        # where recorded episodes go: "episodes_dir" in collect_settings.json (default ~/junction26/episodes); read at start.
+        # 2026-11-14 22:40: new pick dataset -> ~/junction26/tDataset2 (the user's request; old episodes/ stays as it is)
+        if self.cfg.get("episodes_dir"):
+            self.EP = Path(str(self.cfg["episodes_dir"])).expanduser(); self.EP.mkdir(parents=True, exist_ok=True)
         self.state, self.msg, self.ok = "idle", "ready: name the block and press Start", True
         self.info = {}
         self.active = False; self.stop_flag = threading.Event()
@@ -195,7 +199,9 @@ class Collector:
     # ------------------------------------------------------------------ motion helpers
     def goto(self, pos, speed=None, **override):
         tgt = {k: float(v) for k, v in pos.items()}; tgt.update(override)
-        for n in JOINTS: tgt[n] = min(self.A.fl[n][1], max(self.A.fl[n][0], tgt[n]))
+        for n in JOINTS:        # the gripper may be commanded past its calibrated end if the arm allows it (arm.set_grip_floor)
+            lo = (getattr(self.A, "g_floor", None) or self.A.fl[n][0]) if n == "gripper" else self.A.fl[n][0]
+            tgt[n] = min(self.A.fl[n][1], max(min(lo, self.A.fl[n][0]), tgt[n]))
         self._tgt = tgt
         return self.A.goto(tgt, speed or self.cfg["speed"])
 
@@ -516,7 +522,8 @@ class Collector:
     def to_wp2(self, wp1, wp2, g_lock):
         """WP1 -> above WP2 (at height) -> straight DOWN into WP2 as the very last motion, slower."""
         above, taught = self.above_wp2(wp1, wp2[0]["pos"])
-        if not taught: self.say("phase 2: 'above WP2' not taught - using an estimate (teach it for a straight drop)", False)
+        # "Above WP2" is optional (a WP2 held high needs no straight drop): without it the arm comes in over WP2 at
+        # WP1's arm height, which is what above_wp2() returns then. No warning.
         self.goto(above, gripper=g_lock)
         self.check()
         self.goto(wp2[0]["pos"], self.cfg["speed"] * 0.5, gripper=g_lock)
@@ -1009,6 +1016,7 @@ def make_router(S, A, ctx, DATA, ROOT):
             img = cv2.resize(f, (960, 960 * f.shape[0] // f.shape[1]), interpolation=cv2.INTER_AREA)
         elif cam == "front" and getattr(S.cams.get("front"), "depth", None) is not None:
             m, _ = prep.inhand_mask(S.cams["front"].depth)
+            m = prep.complete_mask(f, m)
             img = prep.apply_mask(f, m) if m is not None else f
             img = cv2.resize(img, (640, 360), interpolation=cv2.INTER_AREA)
         else:

@@ -82,6 +82,26 @@ class Scene:
         for _ in range(int(0.6 / m.opt.timestep)):  # let the bricks fall and settle
             mujoco.mj_step(m, d)
 
+    def placed(self) -> list[str]:
+        """Bricks on the plate (not parked)."""
+        return [n for n in self.bricks if self.data.xpos[self.bricks[n]][0] < PARK[0] - 0.2]
+
+    def nearest(self) -> tuple[str, float]:
+        """The brick closest to the robot base (origin, table plane) and its lead over the next one in m."""
+        dist = sorted((float(np.linalg.norm(self.data.xpos[self.bricks[n]][:2])), n) for n in self.placed())
+        return dist[0][1], (dist[1][0] - dist[0][0]) if len(dist) > 1 else 1.0
+
+    def reset_nearest(self, rng: np.random.Generator, n_bricks: int, margin: float = 0.015, tries: int = 30) -> str:
+        """Target rule for multi-brick plates (user, 2026-11-14): always pick the brick CLOSEST TO THE ROBOT.
+        Layouts where two bricks are within `margin` of each other in distance are redrawn, so every demo is
+        unambiguous. Returns the target's name."""
+        names = list(self.bricks)
+        for _ in range(tries):
+            self.reset(rng, n_bricks, str(rng.choice(names)))
+            tgt, lead = self.nearest()
+            if lead >= margin: return tgt
+        return tgt
+
     # ------------------------------------------------------------------ grasp choice
     def grasp_axis(self, name: str) -> tuple[float, float, np.ndarray]:
         """(closing yaw, width across the jaws, grasp centre) for the brick as it lies now.

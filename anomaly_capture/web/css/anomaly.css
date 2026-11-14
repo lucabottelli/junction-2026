@@ -45,3 +45,16 @@
  #p-anomaly .an-st{text-align:left}
 }
 #p-anomaly .an-blocks>.muted{padding-top:14px}
+
+/* hand-feed capture */
+#p-anomaly .an-feed{margin-top:0;margin-bottom:56px}
+#p-anomaly .an-frow{display:flex;align-items:center;gap:16px;padding:9px 0;border-bottom:1px solid var(--line)}
+#p-anomaly .an-flab{width:96px;flex:none;font-size:11px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)}
+#p-anomaly .an-fbtns{margin-top:16px}
+#p-anomaly .an-fhead{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+#p-anomaly .an-fcount{font-size:13px;color:var(--ink2)}
+#p-anomaly .an-fcount .serif{font:400 26px/1 var(--serif);color:var(--ink);margin-right:3px}
+#p-anomaly .an-ftext{margin-top:8px;font-size:13.5px;line-height:1.5}
+#p-anomaly .an-fmsg .callout{margin-top:12px}
+#p-anomaly .an-ftab{width:100%;border-top:1px solid var(--line)}
+#p-anomaly .an-ftab td{vertical-align:middle}

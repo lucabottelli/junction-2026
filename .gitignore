@@ -34,3 +34,7 @@ bench/results/*
 # OpenVINO compile cache and test-written settings
 anomaly_capture/openvino_cache/
 anomaly_capture/sort_settings.json
+episodes_sim_snap/
+tDataset2/
+anomaly_capture/MUJOCO_LOG.TXT
+anomaly_capture/*.before_front_move.*

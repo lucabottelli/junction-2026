@@ -1,0 +1,26 @@
+{
+ "H_pixel_to_xy": [
+  [
+   8.991520040833212e-05,
+   0.0012937550541533723,
+   -0.050867396090520337
+  ],
+  [
+   0.0007809433946621055,
+   -0.00013366982540999626,
+   -0.276238746415279
+  ],
+  [
+   -0.0005005851758671411,
+   0.0018026415768943216,
+   1.0
+  ]
+ ],
+ "image": "top policy crop 640x480 (act_roi of the 1080p frame)",
+ "n": 78,
+ "inliers": 52,
+ "loo_median_mm": 7.5,
+ "loo_p90_mm": 10.7,
+ "camera_model_median_mm": 9.6,
+ "note": "xy = FK TCP of the follower at hand-off (sim/station.ticks_to_rad + ArmIK.tcp), robot base frame, metres. Errors include how far off-centre the human grasped and FK/joint-map error."
+}

@@ -35,6 +35,7 @@
 #p-crop .cr-depth{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 #p-crop .cr-depth #cr-dstat{line-height:1.5}
 #p-crop .cr-depth #cr-dstat b{color:var(--ink);font-weight:500}
+#p-crop .cr-depth .cr-dbtns{display:flex;flex-direction:column;gap:6px;align-items:stretch;flex:none}
 
 @media (max-width:1180px){#p-crop .cr-front{grid-template-columns:1fr;gap:20px}}
 @media (max-width:900px){

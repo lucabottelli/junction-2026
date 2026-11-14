@@ -15,9 +15,9 @@ const SLOTS={
  drops:{t:'Reset spots',s:'Reset spot',
   d:'After each episode the robot drops the block at a random one of these, so the next pick starts from a new place.',
   how:'Add 3–5 poses about 3 cm above different spots of the orange plate. Without any, the block is put back where it was picked, turned randomly.'},
- wp2_above:{t:'Above waypoint 2',s:'Above WP2',single:1,
-  d:'The approach to WP2: the robot comes in high, then moves straight down, so it never sweeps across the yellow plate.',
-  how:'About 5 cm straight above WP2, clear of the yellow plate. The gripper value is ignored (the clamp stays locked).'},
+ wp2_above:{t:'Above waypoint 2 (optional)',s:'Above WP2',single:1,
+  d:'Optional. Only for a WP2 held low over the table: the robot comes in high, then moves straight down, so it never sweeps across the yellow plate. With WP2 held high (as it is with the raised front camera), leave this empty.',
+  how:'Leave empty when WP2 is well above the table. For a low WP2: about 5 cm straight above it, clear of the yellow plate. The gripper value is ignored (the clamp stays locked).'},
  wp2:{t:'Waypoint 2',s:'WP2',capture:1,test:['wp2','Test WP1 → WP2 path'],
   d:'Photo poses in front of the front camera. A photo (image + depth) is taken at every pose here.',
   how:'Brick held in front of the front camera, at least 35 cm away so depth works. Add one or more views.'},
@@ -108,7 +108,7 @@ function render(){
  const req=wpRequired(),nt=req.filter(n=>wpsOf(n).length).length,nd=wpsOf('drops').length;
  setH('wp-kpis',`<div class=kpi><div class=k>Required poses</div><div class=v>${nt}<small>of ${req.length}</small></div><div class=s>${nt==req.length?'All taught, ready to record':'Start pose and waypoint 1'+(req.length>2?' + photo poses':'')}</div><div class="pbar${nt==req.length?' ok':''}"><i style="width:${req.length?Math.round(100*nt/req.length):0}%"></i></div></div>
   <div class=kpi><div class=k>Reset spots</div><div class=v>${nd||'–'}</div><div class=s>${nd?'Random drop after each episode':'Put back where picked, turned'}</div></div>
-  <div class=kpi><div class=k>Photos at WP2</div><div class="v wp-off">${ph2?'On':'Off'}</div><div class=s>${ph2?'Needs above WP2 + WP2':'Switch under Record → Options'}</div></div>
+  <div class=kpi><div class=k>Photos at WP2</div><div class="v wp-off">${ph2?'On':'Off'}</div><div class=s>${ph2?'Needs WP2':'Switch under Record → Options'}</div></div>
   <div class=kpi><div class=k>Re-grip</div><div class="v wp-off">${ph2&&rg?'On':'Off'}</div><div class=s>Experimental, not reliable yet</div></div>`);
  setH('wp-req-n',`<span class="badge ${nt==req.length?'ok':'warn'}">${nt} of ${req.length} taught</span>`);
  setH('wp-ph2-n',`<span class="badge ${ph2?'acc':'line'}">${ph2?(rg?'Photos + re-grip on':'Photos on'):'Off'}</span><a class="btn sm ghost" href="/record">Options in Record${ico('go')}</a>`);

@@ -1,0 +1,6 @@
+{
+ "calibrated_min": 1875,
+ "servo_min": 1755,
+ "shut": 1849.0,
+ "shut_floor": 1755
+}

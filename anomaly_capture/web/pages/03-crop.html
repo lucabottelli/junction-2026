@@ -53,11 +53,13 @@
    <figure class=fig><div class=feed><img id=v-front data-src="/collect/view/front" data-ms=500 alt=""><div class=nofeed>No signal</div></div>
     <figcaption><b>Front</b> · masked by depth</figcaption></figure>
    <div class=cr-checks>
-    <div class=check><span class="ic opt"><svg class=i><use href="#i-check"/></svg></span><span>Hold a brick at <b>WP2</b> (or move the arm there with it).</span></div>
+    <div class=check><span class="ic opt"><svg class=i><use href="#i-check"/></svg></span><span>First, with nothing held and the arm parked away from WP2, <b>store the depth background</b>: from then on only what is nearer than the empty scene can be masked in, never the table.</span></div>
+    <div class=check><span class="ic opt"><svg class=i><use href="#i-check"/></svg></span><span>Then hold a brick at <b>WP2</b> (or move the arm there with it).</span></div>
     <div class=check><span class="ic opt"><svg class=i><use href="#i-check"/></svg></span><span>Only the <b>gripper and brick</b> keep their colour; the table and room are flat grey.</span></div>
-    <div class=check><span class="ic opt"><svg class=i><use href="#i-check"/></svg></span><span>With the brick held at WP2, run <b>Auto-tune depth</b> once: it moves the depth window as close as the brick (down to about 6 cm) and remembers its distance.</span></div>
+    <div class=check><span class="ic opt"><svg class=i><use href="#i-check"/></svg></span><span>Then, with the brick held at WP2, run <b>Auto-tune depth</b> once: it moves the depth window as close as the brick (down to about 6 cm) and remembers its distance.</span></div>
     <div class=cr-depth><span class="small muted" id=cr-dstat>Depth · waiting for the server…</span>
-     <button class="btn sm ghost" id=cr-dtune><svg class=i><use href="#i-target"/></svg>Auto-tune depth</button></div>
+     <div class=cr-dbtns><button class="btn sm ghost" id=cr-dbg><svg class=i><use href="#i-layers"/></svg>Store depth background</button>
+     <button class="btn sm ghost" id=cr-dtune><svg class=i><use href="#i-target"/></svg>Auto-tune depth</button></div></div>
     <p class="small muted cr-note">No usable depth mask means the photo is marked uncertain and the brick is never sorted as good. The view then shows the plain, unmasked frame.</p>
    </div>
   </div>

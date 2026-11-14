@@ -13,7 +13,7 @@ model error appear on both sides, where it cancels.
     python vpick.py --fit-demos      first calibration from the recorded teleop picks (episodes/)
     python vpick.py --show IMG       draw the detections on a saved top frame
 """
-import json, math, sys, tempfile, time
+import json, math, random, sys, tempfile, time
 from pathlib import Path
 
 import cv2
@@ -143,6 +143,63 @@ class Kin:
         ik = self.ik; ik.data.qpos[ik.qpos_adr] = np.asarray(q)[:5]; self.mj.mj_kinematics(self.m, ik.data)
         return ik.tcp(ik.data).copy(), ik.gripper_yaw(ik.data), ik.tilt(ik.data)
 
+    def pivot(self, ticks, deg):
+        """The pose `ticks` (dict) with the wrist flexed by deg while the grasp point stays where it is: shoulder
+        lift and elbow are re-solved, pan / roll / gripper untouched. What is held between the fingers turns in
+        place, so it keeps its position in a fixed camera's picture. -> (ticks dict, position error m)"""
+        ik, mj = self.ik, self.mj
+        q = self.rad(ticks)[:5].copy(); p0 = self.fk(q)[0]
+        q[3] += math.radians(deg); e = np.zeros(3)
+        for _ in range(60):
+            ik.data.qpos[ik.qpos_adr] = q; mj.mj_kinematics(self.m, ik.data); mj.mj_comPos(self.m, ik.data)
+            p = ik.tcp(ik.data); e = p0 - p
+            if np.linalg.norm(e) < 2e-5: break
+            mj.mj_jac(self.m, ik.data, ik._jacp, ik._jacr, p, ik.body)
+            q[[1, 2]] += np.clip(np.linalg.lstsq(ik._jacp[:, ik.dof_adr][:, [1, 2]], e, rcond=None)[0], -0.15, 0.15)
+        out = self.ticks(q, ticks["gripper"]); out["shoulder_pan"] = float(ticks["shoulder_pan"]); out["wrist_roll"] = float(ticks["wrist_roll"])
+        return out, float(np.linalg.norm(e))
+
+    def elevation(self, q):
+        """Angle (deg) of the finger direction above horizontal for joints q (rad); negative = pointing down.
+        The model's joint zeros are not measured, so the absolute value can be tens of degrees off; differences
+        between poses are what to rely on."""
+        self.fk(q); return math.degrees(math.asin(float(np.clip(-self.ik.data.xmat[self.ik.body].reshape(3, 3)[2, 2], -1, 1))))
+
+    def pose_at(self, seed_ticks, target, elev_deg, roll_ticks=None):
+        """Joints (ticks dict) that put the grasp point at `target` (model frame, m) with the fingers at elev_deg
+        above horizontal: pan, shoulder lift, elbow and wrist flex are solved; roll and gripper come from
+        seed_ticks (roll_ticks overrides the roll). -> (ticks, position error m)"""
+        ik, mj = self.ik, self.mj
+        seed = dict(seed_ticks)
+        if roll_ticks is not None: seed["wrist_roll"] = roll_ticks
+        q = self.rad(seed)[:5].copy(); target = np.asarray(target, np.float64); e = np.ones(4)
+        for _ in range(300):
+            ik.data.qpos[ik.qpos_adr] = q; mj.mj_kinematics(self.m, ik.data); mj.mj_comPos(self.m, ik.data)
+            p = ik.tcp(ik.data).copy(); el = self.elevation(q); e = np.r_[target - p, math.radians(elev_deg - el)]
+            if np.linalg.norm(e[:3]) < 2e-5 and abs(e[3]) < 1e-3: break
+            ik.data.qpos[ik.qpos_adr] = q; mj.mj_kinematics(self.m, ik.data); mj.mj_comPos(self.m, ik.data)
+            mj.mj_jac(self.m, ik.data, ik._jacp, ik._jacr, p, ik.body); Jp = ik._jacp[:, ik.dof_adr][:, :4].copy()
+            Je = np.zeros(4)
+            for k in range(4):
+                q2 = q.copy(); q2[k] += 1e-4; Je[k] = math.radians(self.elevation(q2) - el) / 1e-4
+            q[:4] += np.clip(np.linalg.lstsq(np.vstack([Jp, Je]), e, rcond=None)[0], -0.08, 0.08)
+        out = self.ticks(q, seed["gripper"]); out["wrist_roll"] = float(seed["wrist_roll"])
+        return out, float(np.linalg.norm(e[:3]))
+
+    def lowest(self, ticks):
+        """Height (m, model frame: table = 0) of the lowest point of the arm's links at the pose `ticks` (dict)."""
+        mj, m, d = self.mj, self.m, self.ik.data
+        if not hasattr(self, "_arm_geoms"):
+            names = ("upper_arm", "lower_arm", "wrist", "gripper", "moving_jaw_so101_v1", "camera_mount")
+            ids = {m.body(n).id for n in names}
+            self._arm_geoms = [g for g in range(m.ngeom) if m.geom_bodyid[g] in ids and m.geom_type[g] == mj.mjtGeom.mjGEOM_MESH]
+        q = self.rad(ticks); d.qpos[self.ik.qpos_adr] = q[:5]; d.qpos[m.joint("gripper").qposadr[0]] = q[5]
+        mj.mj_kinematics(m, d); z = 9.0
+        for g in self._arm_geoms:
+            k = m.geom_dataid[g]; v = m.mesh_vert[m.mesh_vertadr[k]:m.mesh_vertadr[k] + m.mesh_vertnum[k]]
+            z = min(z, float((d.geom_xpos[g] + v @ d.geom_xmat[g].reshape(3, 3).T)[:, 2].min()))
+        return z
+
     def solve(self, q0, target, yaw, iters=80):
         """Joint angles (5,) putting the grasp point at target with the jaws closing along yaw (mod 180 deg: both
         flips are tried, the smaller wrist turn wins). -> (q, position error m, tilt rad, yaw used)"""
@@ -202,6 +259,12 @@ TICKS_SHUT, TICKS_PER_M = 1930.0, 9700.0     # gripper ticks with the jaws shut 
 MAX_GRASP_W = 0.052
 HOVER = 0.055            # m above the grasp point where the arm lines up before going down
 FINGER = 0.011           # half thickness of a jaw, for the clearance to the neighbours
+# What a grasp tuner may change per pick (grasp_tuner.Tuner.suggest); these values change nothing:
+NEUTRAL = {"dz_mm": 0.0,             # grasp height offset
+           "dxy_mm": 0.0,            # shift along the jaw axis (+ = toward the moving jaw)
+           "yaw_off_deg": 0.0,       # jaw direction offset
+           "open_frac": 1.0,         # multiplier on the opening margin around the brick
+           "approach_speed": 1.0}    # multiplier on the descent speed
 
 
 def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
@@ -253,14 +316,18 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
 class VisionPick:
     """One pick with retries, same contract as policy.ActPick: run() -> (clamp command g_lock, info) or raises
     PickFailed / Stopped. A = arm.Arm, C = collect.Collector, S = capture state (frames, frame_t)."""
-    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None):
+    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None,
+                 on_event=None, tuner=None):
         import policy as pol
         self.pol = pol
         self.A, self.C, self.S, self.kin, self.calib = A, C, S, kin, calib
         self.retries, self.speed = int(retries), float(speed)
         self.check = check or (lambda: None); self.say = say or (lambda m, ok=True: None)
         self.debug_dir = Path(debug_dir) if debug_dir else None
-        self.target = target                    # colour to pick ("" / None = the brick nearest to the robot)
+        self.target = target                    # colour to pick; "random" = one of the colours seen, drawn once;
+        self.colour = None                      # "" / None = the brick nearest to the robot, whatever its colour
+        self.on_event = on_event or (lambda name, info: None)     # "start" (plan made, about to move), "grasped"
+        self.tuner = tuner; self.tune = dict(NEUTRAL)             # grasp_tuner.Tuner (optional): suggest(colour)
         self.attempts = []; self.grasp_pose = None; self.live = {}; self.tried = set(); self.g_lock = None; self.z_rel = 0.0
         self.plate = None; self.seen = []
 
@@ -299,6 +366,22 @@ class VisionPick:
         bricks, plate = detect(f)
         return f, bricks, plate
 
+    def _settle(self, max_s=0.8):
+        """Wait until the measured body joints stop moving (A.goto returns within 3.5 deg of the target, which is
+        still several mm at the fingertips)."""
+        t0 = time.time(); last = dict(self.A.pos)
+        while time.time() - t0 < max_s:
+            time.sleep(0.1); self._check(); now = dict(self.A.pos)
+            if max(abs(now[n] - last[n]) for n in self.pol.BODY) <= 2: return
+            last = now
+
+    def _snap(self, name):
+        """Top + wrist frames to the debug folder (where the fingers really are relative to the brick)."""
+        if self.debug_dir is None: return
+        for cam in ("top", "wrist"):
+            f = self.S.frames.get(cam)
+            if f is not None: self._save(f"{name}_{cam}.jpg", cv2.resize(f, (960, 540)))
+
     def _save(self, name, img):
         if self.debug_dir is not None:
             try: cv2.imwrite(str(self.debug_dir / name), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -310,7 +393,14 @@ class VisionPick:
         gmin = A.fl["gripper"][0]
         f, bricks, plate = self.look()
         every = bricks
-        if self.target: bricks = [b for b in bricks if b["colour"] == self.target] or bricks
+        if self.target == "random":
+            if self.colour is None:
+                seen = sorted({b["colour"] for b in bricks if b["colour"] in COLOURS})
+                self.colour = random.choice(seen) if seen else ""
+            want = self.colour
+        else: want = self.target
+        if want: bricks = [b for b in bricks if b["colour"] == want]
+        if want and not bricks: raise self.pol.PickFailed(f"no {want} brick found on the orange plate", retry=False)
         if not bricks: raise self.pol.PickFailed("no brick found on the orange plate", retry=False)
         wp1 = kin.rad(C.wps("wp1")[0]["pos"])
         plans = plan_grasps(bricks, self.calib, kin, wp1, A.fl["wrist_roll"], plate)
@@ -327,21 +417,38 @@ class VisionPick:
                 "n_bricks": len(bricks), "tilt_deg": round(math.degrees(g["tilt"]), 1)}
         self.live = {"attempt": k + 1, "brick": b["colour"], "bricks": len(bricks)}
         self.say(f"vision pick {k + 1}/{self.retries + 1}: {b['colour']} brick, {len(bricks)} on the plate")
-        p = np.array(g["xyz"]); yaw = g["yaw"]; g_open = min(A.fl["gripper"][1], max(g["open"], gmin + 200))
+        if self.tuner is not None:
+            try: self.tune = {**NEUTRAL, **(self.tuner.suggest(b["colour"]) or {})}
+            except Exception as e: self.tune = dict(NEUTRAL); info["tuner_error"] = str(e)
+        tu = self.tune; info["tune"] = dict(tu)
+        yaw = g["yaw"] + math.radians(tu["yaw_off_deg"]); x = np.array([math.cos(yaw), math.sin(yaw), 0.0])
+        p = np.array(g["xyz"]) + tu["dxy_mm"] / 1000.0 * x + [0, 0, tu["dz_mm"] / 1000.0]
+        gap = g["width"] + (FIX_CLEAR + MOV_CLEAR) * max(0.5, min(2.0, tu["open_frac"]))
+        g_open = min(A.fl["gripper"][1], max(TICKS_SHUT + TICKS_PER_M * gap, gmin + 200))
+        v_down = 0.45 * max(0.4, min(2.0, tu["approach_speed"]))
+        self.on_event("start", info)
         # 1. above the brick, jaws open; measured joints servoed onto the IK pose
         q_hover, err = kin.ik.solve(np.array(g["q"]), p + [0, 0, HOVER], yaw, iters=60)
         self._goto(q_hover, g_open, 1.0)
         off = self._servo_in(q_hover, g_open)
+        self._settle()
         z0 = kin.fk(self._q_now())[0][2] - (p[2] + HOVER)              # what "on target" reads at the hover
+        self._snap(f"{tag}hover")
+        info["hover_err_mm"] = [round(v * 1000, 1) for v in (kin.fk(self._q_now())[0] - (p + [0, 0, HOVER]))]
+        info["off_ticks"] = {n: round(v) for n, v in off.items()}
         # 2. straight down in steps; stop early if the fingers stand on something (measured height stops following)
-        q = q_hover; n = 6; touched = None; z_low = p[2] - 0.004
+        q = q_hover; n = 5; touched = None; z_low = p[2] - 0.004; steps = []; info["dz_steps_mm"] = steps
         for s in range(1, n + 1):
             z = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
             q, _ = kin.ik.solve(q, np.array([p[0], p[1], z]), yaw, iters=30)
-            self._goto(q, g_open, 0.45, off); time.sleep(0.08)
-            dz = kin.fk(self._q_now())[0][2] - z - z0
-            if dz > 0.005: touched = (z, dz); break
+            self._goto(q, g_open, v_down, off); self._settle(0.5)
+            tgt = kin.ticks(q, g_open)                                   # sag changes as the arm reaches down: correct
+            for n_ in off: off[n_] += max(-40.0, min(40.0, tgt[n_] - A.pos[n_]))   # the joints again at every step
+            self._goto(q, g_open, 0.3, off); self._settle(0.5)
+            dz = kin.fk(self._q_now())[0][2] - z; steps.append(round(dz * 1000, 1))
+            if dz > 0.005: touched = (z, dz); break                      # still held up after the correction: contact
         info["touch_mm"] = None if touched is None else [round((touched[0] - p[2]) * 1000, 1), round(touched[1] * 1000, 1)]
+        self._snap(f"{tag}low")
         if touched and touched[0] - p[2] > 0.014:                        # stopped high: standing on the brick
             C.goto(dict(A.cmd), 0.5, gripper=g_open); C.rise(C.wps("wp1")[0]["pos"])
             return "landed", info
@@ -360,6 +467,7 @@ class VisionPick:
         from collect import REGRIP_SQUEEZE
         g_lock = max(gmin, g_stall - REGRIP_SQUEEZE)
         C.goto(dict(A.cmd), 0.5, gripper=g_lock); time.sleep(0.15)
+        self.on_event("grasped", info)
         # 4. up, to waypoint 1, still held?
         wp1t = C.wps("wp1")[0]["pos"]
         C.rise(wp1t); C.goto(wp1t, gripper=g_lock); time.sleep(0.3)

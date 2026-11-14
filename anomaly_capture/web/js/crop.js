@@ -55,16 +55,23 @@ function depthLine(d){if(!d||!d.available)return '<span class=warn>Depth · fron
  const win=`${d.near_mm??'?'}–${d.far_mm==null?'∞':d.far_mm} mm`;
  const head=`Depth · ${d.width}×${d.height}, shift ${d.shift}, measures <b>${win}</b>`;
  const m=d.mask_ok?`<span class=ok>mask at ${d.z_mm??'?'} mm</span>`:`<span class=warn>no mask</span> · ${esc(d.mask_why||'')}`;
- return head+'<br>'+m+` · ${Math.round((d.valid_roi||0)*100)}% of the area has depth`+(d.warning?`<br><span class=warn>${esc(d.warning)}</span>`:'')}
+ const g=d.background||{},bg=g.usable?`<span class=ok>background ${g.taken?esc(g.taken.replace('T',' ')):'set'}</span>`
+  :`<span class=warn>${esc(g.warning||'no depth background')}</span>`;
+ return head+'<br>'+m+` · ${Math.round((d.valid_roi||0)*100)}% of the area has depth<br>`+bg+(d.warning?`<br><span class=warn>${esc(d.warning)}</span>`:'')}
 function depthPoll(){const sec=el('p-crop');if(!sec||sec.offsetParent===null||tuning)return;
  getJ('/depth/status').then(d=>setH('cr-dstat',depthLine(d))).catch(()=>{})}
+async function depthJob(btn,url,busyTxt,failTxt){tuning=true;const b=el(btn);if(b)b.disabled=true;
+ setH('cr-dstat','<span class=spin style="width:10px;height:10px"></span> '+busyTxt);
+ try{const x=await fetch(url,{method:'POST'});if(!x.ok)throw new Error(x.status+' '+x.statusText);
+  const r=await x.json();toast(r.msg||'done',r.ok?'ok':'err')}
+ catch(e){toast(failTxt+': '+e.message,'err')}
+ finally{tuning=false;if(b)b.disabled=false;depthPoll()}}
+async function depthBg(){if(tuning)return;
+ if(!await ask('Store the depth background?','Nothing held, the arm parked away from WP2, nobody leaning in. The front depth is recorded for about 20 seconds; nothing moves.','Store background'))return;
+ depthJob('cr-dbg','/depth/background','Recording the empty scene…','Background failed')}
 async function depthTune(){if(tuning)return;
  if(!await ask('Auto-tune the front depth?','Hold a brick at a WP2 photo pose first. The depth window is swept for about 5 seconds; nothing moves.','Auto-tune'))return;
- tuning=true;const b=el('cr-dtune');if(b)b.disabled=true;setH('cr-dstat','<span class=spin style="width:10px;height:10px"></span> Tuning the depth window…');
- try{const x=await fetch('/depth/autotune',{method:'POST'});if(!x.ok)throw new Error(x.status+' '+x.statusText);
-  const r=await x.json();toast(r.msg||'done',r.ok?'ok':'err')}
- catch(e){toast('Auto-tune failed: '+e.message,'err')}
- finally{tuning=false;if(b)b.disabled=false;depthPoll()}}
+ depthJob('cr-dtune','/depth/autotune','Tuning the depth window…','Auto-tune failed')}
 
 PAGE.crop={
  init(){const box=el('cropbox');if(!box)return;
@@ -73,6 +80,7 @@ PAGE.crop={
   box.addEventListener('dragstart',e=>e.preventDefault());
   const rb=el('cr-reset');if(rb)rb.addEventListener('click',reset);
   const tb=el('cr-dtune');if(tb)tb.addEventListener('click',depthTune);
+  const gb=el('cr-dbg');if(gb)gb.addEventListener('click',depthBg);
   show(C)},
  show(){lastSig='';show(C);depthPoll()},
  slow(){depthPoll()},

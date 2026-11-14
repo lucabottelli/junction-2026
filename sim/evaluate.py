@@ -51,7 +51,9 @@ def main() -> None:
     ap.add_argument("--backend", default="auto"); ap.add_argument("--device", default="auto")
     ap.add_argument("--seconds", type=float, default=15.0)
     ap.add_argument("--video", type=int, default=3, help="write a video of the first N episodes")
-    ap.add_argument("--bricks", nargs="*", help="only these target bricks")
+    ap.add_argument("--bricks", nargs="*", help="only these target bricks (rule random)")
+    ap.add_argument("--rule", choices=["random", "nearest"], default="nearest",
+                    help="which brick counts as the target: closest to the robot (default) or a random colour")
     a = ap.parse_args()
 
     from physicalai.inference import InferenceModel
@@ -77,7 +79,11 @@ def main() -> None:
         rng = np.random.default_rng(a.seed + k)
         target = str(rng.choice(names))
         vis = rz.apply(rng)
-        sc.reset(rng, int(rng.choice([1, 2, 3], p=[0.5, 0.35, 0.15])), target)
+        if a.rule == "nearest":
+            target = sc.reset_nearest(rng, int(rng.choice([1, 2, 3], p=[0.35, 0.35, 0.30])))
+        else:
+            sc.reset(rng, int(rng.choice([1, 2, 3], p=[0.5, 0.35, 0.15])), target)
+        nb = len(sc.placed())
         station.set_wrist_camera(model, data, {**cal, "wrist": vis["wrist"]})
         looks = {c: generate.sample_look(c, rng) for c in cams}
         bgs = {c: (pools[c][rng.integers(len(pools[c]))] if pools[c] and rng.uniform() < 0.85 else None) for c in cams}
@@ -118,13 +124,15 @@ def main() -> None:
         if writer: writer.release()
         outcome = "success" if reached else ("dropped" if grasped else ("touched" if max_z > z0 + 0.01 else "no_grasp"))
         stats[outcome] += 1
-        rows.append({"seed": a.seed + k, "brick": target, "outcome": outcome, "t_lift": t_lift,
+        rows.append({"seed": a.seed + k, "brick": target, "n_bricks": nb, "outcome": outcome, "t_lift": t_lift,
                      "steps": step + 1})
-        print(f"{k:3d} {target:6s} {outcome:9s} lift@{t_lift}  ({step + 1} steps)")
+        print(f"{k:3d} {target:6s} {nb} brick(s) {outcome:9s} lift@{t_lift}  ({step + 1} steps)", flush=True)
     rend.close(); seg.close(); policy.close()
     n = sum(stats.values())
     summary = {"model": str(a.model), "n": n, **{k: v for k, v in stats.items()},
-               "success_rate": stats["success"] / n, "grasp_rate": (stats["success"] + stats["dropped"]) / n}
+               "success_rate": stats["success"] / n, "grasp_rate": (stats["success"] + stats["dropped"]) / n,
+               "by_n_bricks": {str(k): f"{sum(1 for r in rows if r['n_bricks'] == k and r['outcome'] == 'success')}/"
+                                        f"{sum(1 for r in rows if r['n_bricks'] == k)}" for k in (1, 2, 3)}}
     (out_dir / "results.json").write_text(json.dumps({"summary": summary, "episodes": rows}, indent=1))
     print(json.dumps(summary), "->", out_dir)
 

@@ -1,0 +1,80 @@
+# Real picks that don't follow the 'pick the brick closest to the robot' rule (sim/real_nearest.py)
+20261114_032524_blue/ep0001_032524   # nearest rule: not nearest
+20261114_124232_blue/ep0001_124232   # nearest rule: not nearest
+20261114_131414_blue/ep0001_131414   # nearest rule: not nearest
+20261114_131414_blue/ep0002_131643   # nearest rule: not nearest
+20261114_131414_blue/ep0003_131736   # nearest rule: tie
+20261114_131414_blue/ep0006_133409   # nearest rule: not nearest
+20261114_131414_blue/ep0007_133445   # nearest rule: not nearest
+20261114_131414_blue/ep0009_133637   # nearest rule: not nearest
+20261114_131414_blue/ep0010_133727   # nearest rule: not nearest
+20261114_131414_blue/ep0013_133913   # nearest rule: not nearest
+20261114_131414_blue/ep0014_134018   # nearest rule: not nearest
+20261114_131414_blue/ep0016_134138   # nearest rule: not nearest
+20261114_131414_blue/ep0017_134231   # nearest rule: not nearest
+20261114_131414_blue/ep0019_134400   # nearest rule: not nearest
+20261114_131414_blue/ep0020_134512   # nearest rule: target not found
+20261114_131414_blue/ep0021_134552   # nearest rule: not nearest
+20261114_131414_blue/ep0022_134644   # nearest rule: not nearest
+20261114_131414_blue/ep0026_134913   # nearest rule: not nearest
+20261114_131414_blue/ep0027_134959   # nearest rule: not nearest
+20261114_131414_blue/ep0029_135132   # nearest rule: not nearest
+20261114_131414_blue/ep0031_135246   # nearest rule: not nearest
+20261114_131414_blue/ep0033_135406   # nearest rule: target not found
+20261114_131414_blue/ep0034_135446   # nearest rule: not nearest
+20261114_131414_blue/ep0036_135558   # nearest rule: not nearest
+20261114_131414_blue/ep0039_135809   # nearest rule: not nearest
+20261114_131414_blue/ep0042_140043   # nearest rule: not nearest
+20261114_131414_blue/ep0044_141328   # nearest rule: not nearest
+20261114_131414_blue/ep0045_141410   # nearest rule: not nearest
+20261114_131414_blue/ep0048_141542   # nearest rule: not nearest
+20261114_131414_blue/ep0052_141852   # nearest rule: not nearest
+20261114_131414_blue/ep0053_141936   # nearest rule: target not found
+20261114_131414_blue/ep0054_142025   # nearest rule: not nearest
+20261114_142128_green/ep0002_142206   # nearest rule: tie
+20261114_142128_green/ep0004_142326   # nearest rule: target not found
+20261114_142128_green/ep0005_142357   # nearest rule: not nearest
+20261114_142128_green/ep0007_142530   # nearest rule: target not found
+20261114_142128_green/ep0009_142703   # nearest rule: target not found
+20261114_142128_green/ep0010_142742   # nearest rule: target not found
+20261114_142128_green/ep0011_142817   # nearest rule: tie
+20261114_142128_green/ep0012_142854   # nearest rule: target not found
+20261114_142128_green/ep0013_142932   # nearest rule: tie
+20261114_142128_green/ep0015_143049   # nearest rule: target not found
+20261114_142128_green/ep0020_143331   # nearest rule: not nearest
+20261114_142128_green/ep0022_143438   # nearest rule: not nearest
+20261114_142128_green/ep0023_143508   # nearest rule: not nearest
+20261114_142128_green/ep0024_143538   # nearest rule: not nearest
+20261114_142128_green/ep0029_143803   # nearest rule: tie
+20261114_142128_green/ep0031_143916   # nearest rule: not nearest
+20261114_142128_green/ep0033_144032   # nearest rule: not nearest
+20261114_142128_green/ep0034_144110   # nearest rule: not nearest
+20261114_142128_green/ep0035_144146   # nearest rule: not nearest
+20261114_142128_green/ep0038_144319   # nearest rule: not nearest
+20261114_142128_green/ep0040_144416   # nearest rule: not nearest
+20261114_142128_green/ep0041_144449   # nearest rule: not nearest
+20261114_150142_pink/ep0004_150343   # nearest rule: tie
+20261114_150142_pink/ep0005_150436   # nearest rule: not nearest
+20261114_150142_pink/ep0006_150508   # nearest rule: not nearest
+20261114_150142_pink/ep0007_150541   # nearest rule: target not found
+20261114_150142_pink/ep0008_150611   # nearest rule: not nearest
+20261114_150142_pink/ep0009_150642   # nearest rule: tie
+20261114_150142_pink/ep0011_150735   # nearest rule: target not found
+20261114_150142_pink/ep0013_150842   # nearest rule: not nearest
+20261114_150142_pink/ep0014_150917   # nearest rule: not nearest
+20261114_150142_pink/ep0018_151119   # nearest rule: not nearest
+20261114_150142_pink/ep0019_151153   # nearest rule: tie
+20261114_150142_pink/ep0023_151417   # nearest rule: not nearest
+20261114_150142_pink/ep0027_151602   # nearest rule: target not found
+20261114_150142_pink/ep0028_151635   # nearest rule: not nearest
+20261114_150142_pink/ep0029_151705   # nearest rule: not nearest
+20261114_150142_pink/ep0030_151733   # nearest rule: not nearest
+20261114_150142_pink/ep0031_151808   # nearest rule: not nearest
+20261114_150142_pink/ep0032_151842   # nearest rule: not nearest
+20261114_150142_pink/ep0033_151907   # nearest rule: not nearest
+20261114_150142_pink/ep0036_152040   # nearest rule: not nearest
+20261114_150142_pink/ep0037_152124   # nearest rule: not nearest
+20261114_150142_pink/ep0039_152221   # nearest rule: not nearest
+20261114_150142_pink/ep0040_152308   # nearest rule: target not found
+20261114_150142_pink/ep0043_152502   # nearest rule: not nearest
+20261114_150142_pink/ep0045_152623   # nearest rule: not nearest

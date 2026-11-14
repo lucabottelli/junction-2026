@@ -143,6 +143,27 @@ def pick_shift(results, plateau=0.95, near_band=70):
     return good[(len(good) - 1) // 2]
 
 
+# ------------------------------------------------------------------ empty-scene depth background
+def background_status(desc, dinfo):
+    """Is a stored background (desc from cam_settings "front_depth"/"background") usable with the depth stream now
+    running (dinfo = camera depth_info)? -> (usable, warning or None). It must have the same resolution and colour
+    focal length, and the current disparity shift must lie within the shifts it was taken with (a background taken
+    across the auto-tune's sweep stays valid after a tune; one taken at a single shift only for that shift)."""
+    if not desc: return False, "no depth background: park the arm away from WP2 and store one"
+    if not dinfo: return False, "front depth not available"
+    if (desc.get("width"), desc.get("height")) != (dinfo.get("width"), dinfo.get("height")):
+        return False, (f"depth background was taken at {desc.get('width')}x{desc.get('height')}, the depth stream is "
+                       f"{dinfo.get('width')}x{dinfo.get('height')} now: ignored, store it again")
+    sh = [int(x) for x in (desc.get("shifts") or [])]
+    cur = int(dinfo.get("shift") or 0)
+    if sh and not (min(sh) <= cur <= max(sh)):
+        return False, f"depth background covers disparity shifts {min(sh)}-{max(sh)}, the shift is {cur} now: ignored, store it again"
+    fa, fb = desc.get("fx_color"), dinfo.get("fx_color")
+    if fa and fb and abs(float(fa) - float(fb)) > 1.0:
+        return False, f"depth background was taken with another colour calibration (fx {fa} vs {fb}): ignored, store it again"
+    return True, None
+
+
 # ------------------------------------------------------------------ device (pyrealsense2 passed in as `rs`)
 def find_device(rs, serial):
     for d in rs.context().query_devices():

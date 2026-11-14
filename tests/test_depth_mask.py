@@ -335,7 +335,7 @@ def test_person_closer_than_the_brick_at_the_frame_edge(cfg):
 
 def test_expected_distance_from_the_autotune_rejects_other_objects(cfg):
     d, rng = scene(9)
-    box(d, 800, 300, 1150, 650, 380, rng)                           # something at 38 cm where the brick should be
+    box(d, 850, 350, 1100, 600, 380, rng)                           # something at 38 cm where the brick should be
     assert prep.inhand_mask(d)[0] is not None                       # without a prior it is a plausible object
     prep.configure_inhand(expect_z_mm=95)
     m, why = prep.inhand_mask(d)
@@ -364,8 +364,10 @@ def test_fill_holes_without_depth_is_unchanged():
 def test_small_depth_image_still_works(cfg):
     """sim_test.py and older callers pass small depth maps: thresholds scale with the image."""
     d = np.full((120, 160), 2000, np.uint16); d[20:100, 40:120] = 400
-    m, info = prep.inhand_mask(d)
-    assert m is not None and m.shape == d.shape and info["z_mm"] == 400
+    m, info = prep.inhand_mask(d, bg=None)
+    assert m is not None and m.shape == d.shape and info["z_mm"] == 400 and not info["bg"]
+    m, info = prep.inhand_mask(d, bg=np.full((120, 160), 2000, np.uint16))
+    assert m is not None and m.shape == d.shape and info["z_mm"] == 400 and info["bg"]
 
 
 # ======================================================================== the real capture (issue 13)
@@ -406,11 +408,18 @@ def test_depth_api_on_the_mock(connected):
     assert st["available"] and (st["width"], st["height"], st["shift"]) == (424, 240, 0)
     assert st["near_mm"] < 150 and st["far_mm"] is None and st["inhand"]["roi"] == srv.get("/status")["roi"]["front"]
     assert srv.get("/status")["settings"]["front"]["depth"]["width"] == 424
+    # the auto-tune needs the empty-scene background first (else the table can win the sweep)
+    assert not srv.post("/depth/autotune")["ok"] and not st["background"]["usable"]
+    srv.goto("home", 0)
+    b = srv.post("/depth/background", frames=6)
+    assert b["ok"] and b["status"]["usable"] and b["background"]["shifts"][0] == 0 and len(b["background"]["shifts"]) > 3, b
+    assert (srv.root / "settings" / "front_depth_bg.png").exists() and srv.get("/depth/status")["inhand"]["bg"]
     srv.goto("wp2", 0)
     st = srv.wait(lambda: (lambda s: s if s["mask_ok"] else None)(srv.get("/depth/status")), 10, "mask at WP2")
     assert 300 < st["z_mm"] < 420 and st["valid_roi"] > 0.5
     r = srv.post("/depth/autotune")
     assert r["ok"], r
+    assert srv.get("/depth/status")["background"]["usable"]           # it covers every shift: still valid after the tune
     assert len(r["results"]) >= 5 and r["results"][0]["shift"] == 0
     assert r["best"]["masked"] and (r["best"]["far_mm"] is None or r["best"]["far_mm"] > r["best"]["z_mm"])
     cs = json.loads((srv.root / "settings" / "cam_settings.json").read_text())["front_depth"]
@@ -716,3 +725,151 @@ def test_capture_meta_records_why_there_is_no_mask(connected):
     nod = [l for l in lines if l.get("brick") == "nodepth" and l["cam"] == "front"]
     assert nod and all(l["depth"] is None and l["depth_mask_why"] == "no depth" for l in nod)
     assert all(l["inhand_cfg"]["roi"] and l["inhand_cfg"]["max_obj_mm"] for l in nod)
+
+
+# ======================================================================== depth background (table in front of the camera)
+def table_depth(h=150.0, tilt_deg=30.0, f=FX, seed=30, noise=1.0, plate=True):
+    """Aligned depth of a table top seen by a camera h mm above it, tilted down tilt_deg (z 180-900 mm in the lower
+    part of the frame, as on the station), with a plate rim standing 15 mm off it."""
+    v, u = np.mgrid[0:H, 0:W].astype(np.float32)
+    t = np.radians(tilt_deg)
+    den = (v - H / 2) / f * np.cos(t) + np.sin(t)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = np.where(den > 1e-3, h / den, 0)
+    rng = np.random.default_rng(seed)
+    z = np.where((z > 0) & (z < 2500), z + rng.normal(0, noise, z.shape), 0)
+    if plate:                                                         # a plate rim: a band 15 mm nearer
+        rim = (np.abs(np.hypot(u - 500, (v - 980) * 2.2) - 260) < 14) & (z > 0)
+        z[rim] -= 15
+    return z.clip(0, 65535).astype(np.uint16)
+
+
+def held_on_table(table, z0=110, seed=31):
+    """Gripper (body at z0+25) + brick (z0) held in front of the table, in the detection area."""
+    d = table.copy(); rng = np.random.default_rng(seed)
+    box(d, 900, 330, 1450, 560, z0 + 25, rng)                        # gripper body
+    box(d, 980, 560, 1380, 900, z0, rng)                              # brick between the jaws
+    return d
+
+
+def test_table_alone_is_refused_without_a_background(cfg):
+    """The station finding: nothing held, /depth/status said mask_ok with z 209 (the table)."""
+    t = table_depth()
+    for roi in (None, STATION_FRONT_ROI):
+        m, why = prep.inhand_mask(t, roi=roi, bg=None)
+        assert m is None, (roi, why)
+    m, why = prep.inhand_mask(t, roi=STATION_FRONT_ROI, bg=None, max_obj_mm=None)
+    assert m is None and "flat surface" in why, why                    # the plane rule itself, not the distance limit
+
+
+def test_table_alone_is_refused_with_a_background(cfg):
+    bg = prep.median_depth([prep.small_depth(table_depth(seed=s)) for s in range(5)])
+    m, why = prep.inhand_mask(table_depth(seed=99), roi=STATION_FRONT_ROI, bg=bg, max_obj_mm=None)
+    assert m is None and "background" in why, why
+
+
+def test_brick_held_in_front_of_the_table_is_kept_with_a_background(cfg):
+    t = table_depth()
+    prep.set_background(prep.median_depth([prep.small_depth(table_depth(seed=s)) for s in range(5)]), {"file": "t.png"})
+    try:
+        d = held_on_table(table_depth(seed=7))
+        m, info = prep.inhand_mask(d, roi=STATION_FRONT_ROI)
+        assert m is not None and abs(info["z_mm"] - 110) <= 30 and info["bg"], info
+        assert frac_in(m, 990, 570, 1370, 890) > 0.99                   # the brick
+        tb = (t > 0) & (np.abs(d.astype(int) - t.astype(int)) < 3)       # table pixels (not covered by the object)
+        tb[300:930, 880:1470] = False
+        assert (m[tb] > 0).mean() < 0.002                               # the table stays grey
+        crop, ci = prep.inspect_crop(np.full((H, W, 3), 100, np.uint8), d)
+        assert ci["masked"] and ci["inhand_cfg"]["bg"]["file"] == "t.png"
+    finally:
+        prep.set_background(None)
+
+
+def test_background_of_another_size_is_ignored(cfg):
+    d = held_on_table(table_depth())
+    m, info = prep.inhand_mask(d, bg=np.zeros((100, 100), np.uint16), roi=STATION_FRONT_ROI)
+    assert m is not None and not info["bg"] and "ignored" in info["bg_note"]
+
+
+def test_background_status_checks_the_depth_config():
+    desc = {"width": 424, "height": 240, "shifts": [0, 14, 42, 72], "fx_color": 1363.9}
+    di = {"width": 424, "height": 240, "shift": 42, "fx_color": 1363.9}
+    assert rd.background_status(desc, di) == (True, None)
+    ok, why = rd.background_status(desc, {**di, "width": 1280, "height": 720}); assert not ok and "424x240" in why
+    ok, why = rd.background_status(desc, {**di, "shift": 150}); assert not ok and "shift" in why
+    ok, why = rd.background_status({**desc, "shifts": [0]}, {**di, "shift": 42}); assert not ok
+    ok, why = rd.background_status(desc, {**di, "fx_color": 1380.0}); assert not ok and "fx" in why
+    ok, why = rd.background_status(None, di); assert not ok and "store" in why
+
+
+def test_median_and_merge_backgrounds():
+    a = np.array([[100, 0, 0], [200, 0, 300]], np.uint16); b = np.array([[102, 0, 50], [0, 0, 300]], np.uint16)
+    c = np.array([[98, 0, 52], [204, 7, 0]], np.uint16)
+    m = prep.median_depth([a, b, c])
+    assert m[0, 0] == 100 and m[0, 1] == 0 and m[0, 2] == 51 and m[1, 0] == 202 and m[1, 1] == 0   # 1 of 3 valid -> 0
+    near = np.array([[0, 90]], np.uint16); far = np.array([[400, 0]], np.uint16)
+    assert prep.merge_backgrounds([near, far]).tolist() == [[400, 90]]
+
+
+def test_mock_background_with_another_config_is_ignored(connected):
+    srv = connected
+    srv.goto("home", 0)
+    if not srv.get("/depth/status")["background"]["usable"]: assert srv.post("/depth/background", frames=6)["ok"]
+    p = srv.root / "settings" / "cam_settings.json"
+    cs = json.loads(p.read_text()); good = json.loads(json.dumps(cs))
+    cs["front_depth"]["background"].update(width=1280, height=720); p.write_text(json.dumps(cs, indent=2))
+    srv.post("/roi/front/reset")                                        # any settings sync re-checks the background
+    st = srv.get("/depth/status")["background"]
+    assert not st["usable"] and "1280x720" in st["warning"] and srv.get("/depth/status")["inhand"]["bg"] is None
+    p.write_text(json.dumps(good, indent=2)); srv.post("/roi/front/reset")
+    assert srv.get("/depth/status")["background"]["usable"]
+    assert srv.post("/depth/background/clear")["ok"] and not srv.get("/depth/status")["background"]["usable"]
+
+
+# ======================================================================== reprocess_inhand.py
+def test_reprocess_inhand_script(tmp_path, cfg):
+    rp = _load("reprocess_inhand")
+    data = tmp_path / "training_images"; d = data / "front" / "inhand" / "good"; d.mkdir(parents=True)
+    st = tmp_path / "settings"; st.mkdir()
+    table = table_depth()
+    cv2.imwrite(str(st / "front_depth_bg.png"), prep.median_depth([prep.small_depth(table_depth(seed=s)) for s in range(3)]))
+    dcfg = {"width": 424, "height": 240, "shift": 0, "fx_color": FX}
+    (st / "cam_settings.json").write_text(json.dumps({"roi": {"front": STATION_FRONT_ROI}, "front_depth": {
+        "background": {"file": "front_depth_bg.png", "width": 424, "height": 240, "shifts": [0, 14], "fx_color": FX,
+                       "taken": "2026-11-14T20:00:00"}}}))
+    img = np.full((H, W, 3), 120, np.uint8)
+    meta = []
+    for stem, dep, t in (("20261114_190000_000_blue_wp2-1", table_depth(seed=5), "20261114_190000_000"),   # nothing held
+                         ("20261114_190100_000_blue_wp2-1", held_on_table(table_depth(seed=6)), "20261114_190100_000"),
+                         ("20261114_180000_000_blue_wp2-1", held_on_table(table_depth(seed=8)), "20261114_180000_000")):
+        cv2.imwrite(str(d / f"{stem}.png"), img); cv2.imwrite(str(d / f"{stem}_depth.png"), dep)
+        cv2.imwrite(str(d / f"{stem}_crop.png"), img[:50, :50]); cv2.imwrite(str(d / f"{stem}_masked.jpg"), img[:50, :50])
+        meta.append({"file": f"front/inhand/good/{stem}.png", "stage": "inhand", "cam": "front", "time": t, "depth_cfg": dcfg,
+                     "depth": {"z_mm": 209}})
+    meta.append({"file": "wrist/inhand/good/x.png", "stage": "release", "cam": "wrist", "time": "20261114_190200_000"})
+    (data / "meta.jsonl").write_text("".join(json.dumps(m) + "\n" for m in meta))
+    before = {p.name: p.read_bytes() for p in d.iterdir()}
+    meta_before = (data / "meta.jsonl").read_text()
+    # dry run: nothing written
+    r = rp.reprocess(data, st / "cam_settings.json", since="20261114_19", log=lambda *a: None)
+    assert r["stats"] == {"masked": 1, "refused": 1, "crop removed (mask now refused)": 1}, r
+    assert {p.name: p.read_bytes() for p in d.iterdir()} == before and (data / "meta.jsonl").read_text() == meta_before
+    # apply, only the captures since 19:00
+    r = rp.reprocess(data, st / "cam_settings.json", apply=True, since="20261114_19", log=lambda *a: None)
+    tbl, held, old = "20261114_190000_000_blue_wp2-1", "20261114_190100_000_blue_wp2-1", "20261114_180000_000_blue_wp2-1"
+    assert not (d / f"{tbl}_crop.png").exists() and not (d / f"{tbl}_masked.jpg").exists()      # table: no crop left
+    assert (d / f"{held}_crop.png").exists() and (d / f"{held}_crop.png").read_bytes() != before[f"{held}_crop.png"]
+    assert (d / f"{old}_crop.png").read_bytes() == before[f"{old}_crop.png"]                      # before --since: untouched
+    for stem in (tbl, held):                                                                       # raw + depth untouched
+        assert (d / f"{stem}.png").read_bytes() == before[f"{stem}.png"]
+        assert (d / f"{stem}_depth.png").read_bytes() == before[f"{stem}_depth.png"]
+    bk = Path(r["backup"])
+    assert (bk / "meta.jsonl").read_text() == meta_before
+    assert (bk / "front/inhand/good" / f"{tbl}_crop.png").read_bytes() == before[f"{tbl}_crop.png"]
+    assert not list(bk.glob("front/inhand/good/*_crop.png")) == []                                 # backups kept ...
+    assert not list((data / "front" / "inhand" / "good").glob("*.bak"))                            # ... outside the trainer's folder
+    recs = {json.loads(l)["file"].split("/")[-1][:-4]: json.loads(l) for l in (data / "meta.jsonl").read_text().splitlines()}
+    assert recs[tbl]["reprocessed"]["masked"] is False and recs[tbl]["depth"] is None and recs[tbl]["depth_mask_why"]
+    assert recs[held]["reprocessed"]["masked"] and recs[held]["reprocessed"]["background"]["file"] == "front_depth_bg.png"
+    assert abs(recs[held]["depth"]["z_mm"] - 110) <= 30 and "reprocessed" not in recs[old]
+    assert len(recs) == 4 and recs["x"]["stage"] == "release"

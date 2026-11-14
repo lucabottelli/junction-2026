@@ -215,6 +215,15 @@ class RSCam:
     def read(self):
         f = self.pipe.wait_for_frames(2000)          # raises after 2 s instead of blocking forever
         self.n += 1
+        # a stalled COLOUR stream still yields framesets (depth keeps arriving, the syncer repeats the last colour frame):
+        # treat a colour frame number that doesn't advance for 1 s as "no frames", so the reconnect logic takes over
+        try: cnum = f.get_color_frame().get_frame_number()
+        except Exception: cnum = None
+        now = time.time()
+        if cnum is not None and cnum == getattr(self, "_cnum", None):
+            if now - self._cnum_t > 1.0: raise RuntimeError(f"colour frames frozen (frame {cnum} for {now - self._cnum_t:.1f} s)")
+        else:
+            self._cnum, self._cnum_t = cnum, now
         if self.align is not None and self.n % 3 == 0:   # depth aligned to colour pixels, ~10 Hz (CPU)
             try:
                 fa = self.align.process(f); d = fa.get_depth_frame()
@@ -556,15 +565,68 @@ def _front_depth_cfg():
     return dict(v) if isinstance(v, dict) else {}
 
 
+BG_CACHE = {"key": None, "depth": None, "usable": False, "warning": None}
+
+
+def _bg_path(desc):
+    return SETTINGS.parent / (desc.get("file") or "front_depth_bg.png")
+
+
 def sync_inhand():
     """Give prep.inhand_mask the station's search area (front detection area), colour focal length, the held-object
-    distance limit and the held-brick distance found by the auto-tune. Every in-hand mask (training crops, live
-    sorting, the live view) uses these."""
+    distance limit, the held-brick distance found by the auto-tune and the empty-scene depth background (only if it
+    matches the running depth config, rs_depth.background_status). Every in-hand mask (training crops, live sorting,
+    the live view) uses these."""
     if S is None: return
     c = _front(); di = c.depth_info() if c else {}
-    cfg = rs_depth.resolve_config(_front_depth_cfg())
+    raw = _front_depth_cfg(); cfg = rs_depth.resolve_config(raw)
     prep.configure_inhand(roi=list(S.roi["front"]), fx=float(di.get("fx_color") or 1380.0), expect_z_mm=cfg.get("expect_z_mm"),
                           max_obj_mm=cfg.get("max_obj_mm"))
+    desc = raw.get("background") if isinstance(raw.get("background"), dict) else None
+    usable, warn = rs_depth.background_status(desc, di)
+    bg = None
+    if usable:
+        f = _bg_path(desc)
+        try:
+            key = (str(f), f.stat().st_mtime)
+            if BG_CACHE["key"] != key:
+                arr = cv2.imread(str(f), cv2.IMREAD_UNCHANGED)
+                if arr is None or arr.dtype != np.uint16: raise ValueError("not a 16-bit depth PNG")
+                BG_CACHE.update(key=key, depth=arr)
+            bg = BG_CACHE["depth"]
+        except Exception as e:
+            usable, warn = False, f"depth background file {f.name} unreadable ({e}): store it again"
+    if warn and usable is False and desc: print(f"!! front depth background: {warn}")
+    BG_CACHE.update(usable=usable, warning=warn)
+    prep.set_background(bg, {**desc, "file": _bg_path(desc).name} if usable else None)
+
+
+def _bg_state():
+    raw = _front_depth_cfg(); desc = raw.get("background") if isinstance(raw.get("background"), dict) else None
+    out = {"exists": bool(desc) and _bg_path(desc).exists(), "usable": BG_CACHE["usable"], "warning": BG_CACHE["warning"]}
+    if desc:
+        out.update({k: desc.get(k) for k in ("taken", "width", "height", "shifts", "frames", "valid_frac", "file")})
+        try: out["age_s"] = round(time.time() - datetime.fromisoformat(desc["taken"]).timestamp())
+        except Exception: out["age_s"] = None
+    return out
+
+
+def _claim():
+    """Exclusive use of the front depth window (auto-tune, background): -> (ok, release fn or error message).
+    Refused while an arm routine, collection or the sorter runs; holds the arm's busy flag (so none of them can
+    start) and prep.TUNING (photos taken anyway are not masked) until release()."""
+    if not TUNE_LOCK.acquire(blocking=False): return False, "the depth auto-tune or background capture is already running"
+    busy = _busy()
+    if busy: TUNE_LOCK.release(); return False, f"busy: {', '.join(busy)} is running. Stop it first."
+    arm = JOBS.get("arm"); claimed = arm is not None
+    if claimed: arm.running = True
+    TUNE["running"] = True; prep.TUNING = True
+
+    def release():
+        TUNE["running"] = False; prep.TUNING = False
+        if claimed: arm.running = False
+        TUNE_LOCK.release()
+    return True, release
 
 
 def _probe_mask(d):
@@ -599,11 +661,12 @@ def depth_status():
             "age_s": round(time.time() - c.depth_t, 2) if c.depth_t else None,
             "valid_roi": st["valid_roi"], "z_mm": st["z_mm"], "object_px": st["object_px"],
             "mask_ok": m is not None, "mask_why": None if m is not None else why,
-            "inhand": dict(prep.INHAND), "tuning": TUNE["running"], "last_tune": TUNE["last"], "busy": _busy()}
+            "inhand": dict(prep.INHAND), "tuning": TUNE["running"], "last_tune": TUNE["last"], "busy": _busy(),
+            "background": _bg_state()}
 
 
 @app.post("/depth/autotune")
-def depth_autotune(shifts: str = "", frames: int = 3):
+def depth_autotune(shifts: str = "", frames: int = 3, no_bg: bool = False):
     """Hold a brick at a WP2 photo pose, then call this: sweeps disparity shifts live, measures the held cluster
     (pixels with real depth, its distance) and the valid fraction in the front detection area per shift, keeps the
     middle of the best plateau of the NEAREST cluster (rs_depth.pick_shift), stores shift + cluster distance in
@@ -624,13 +687,12 @@ def depth_autotune(shifts: str = "", frames: int = 3):
     try: cands = sorted({int(min(rs_depth.SHIFT_MAX, max(0, int(x)))) for x in shifts.split(",") if x.strip()})
     except ValueError: return {"ok": False, "msg": "shifts must be integers, e.g. 0,40,80"}
     cands = cands or rs_depth.candidate_shifts(fx, B)
-    if not TUNE_LOCK.acquire(blocking=False): return {"ok": False, "msg": "auto-tune already running"}
-    arm = JOBS.get("arm"); claimed = False
+    if not BG_CACHE["usable"] and not no_bg:      # without it the table in front of the camera can win the sweep
+        return {"ok": False, "msg": "store a depth background first (empty scene, arm parked away from WP2): "
+                                    + (BG_CACHE["warning"] or "none usable"), "background": _bg_state()}
+    ok, release = _claim()
+    if not ok: return {"ok": False, "msg": release + (" Hold the brick at WP2 with nothing running, then tune." if "busy" in release else "")}
     try:
-        busy = _busy()
-        if busy: return {"ok": False, "msg": f"busy: {', '.join(busy)} is running. Stop it, hold the brick at WP2, then tune."}
-        if arm is not None: arm.running = True; claimed = True     # sorter/collector/arm runs refuse to start now
-        TUNE["running"] = True; prep.TUNING = True
         orig, roi, results = di["shift"], list(S.roi["front"]), []
         try:
             for sh in cands:
@@ -661,12 +723,67 @@ def depth_autotune(shifts: str = "", frames: int = 3):
             except Exception: pass
             out = {"ok": False, "msg": f"auto-tune failed: {e}", "results": results}
     finally:
-        TUNE["running"] = False; prep.TUNING = False
-        if claimed: arm.running = False
-        TUNE_LOCK.release()
+        release()
+        sync_inhand()                                 # the shift may have changed: re-check the background
     TUNE["last"] = {k: out.get(k) for k in ("ok", "msg", "best")}
     S.say(out["msg"], out["ok"])
     return out
+
+
+@app.post("/depth/background")
+def depth_background(frames: int = 20):
+    """Store the EMPTY-SCENE front depth (park the arm away from WP2, nothing held, nobody leaning in): per-pixel
+    median of `frames` aligned depth frames. With advanced mode it is taken at every auto-tune shift and merged, so it
+    stays valid after a tune; without, only at the current shift. Saved as a 16-bit PNG next to cam_settings.json,
+    described in cam_settings "front_depth"/"background". In-hand masks then only keep what is nearer than it."""
+    c = _front()
+    if c is None: return {"ok": False, "msg": "front depth camera not available"}
+    di = c.depth_info()
+    if not di.get("enabled"): return {"ok": False, "msg": f"front depth stream is off: {di.get('warning') or 'see the restart log'}"}
+    n = max(5, min(60, int(frames)))
+    sweep = (rs_depth.candidate_shifts(di["fx_depth"], di["baseline_mm"]) if di.get("advanced") and _has_intrinsics(di)
+             else [int(di.get("shift") or 0)])
+    ok, release = _claim()
+    if not ok: return {"ok": False, "msg": release + (" Park the arm away from WP2 first." if "busy" in release else "")}
+    orig = int(di.get("shift") or 0); layers = []
+    try:
+        for sh in sweep:
+            if di.get("advanced"): c.set_shift(sh)
+            fr = _fresh_depths(c, n, timeout=n / 5.0 + 3.0)
+            if len(fr) >= max(3, n // 2): layers.append(prep.median_depth([prep.small_depth(x) for x in fr]))
+        if not layers: out = {"ok": False, "msg": "no depth frames arrived: is the front camera running?"}
+        else:
+            bg = prep.merge_backgrounds(layers)
+            desc = {"file": "front_depth_bg.png", "taken": datetime.now().isoformat(timespec="seconds"),
+                    "width": di["width"], "height": di["height"], "shifts": sorted(set(sweep)), "frames": n,
+                    "size": [int(bg.shape[1]), int(bg.shape[0])], "scale": prep.MASK_SCALE,
+                    "fx_color": di.get("fx_color"), "valid_frac": round(float((bg > 0).mean()), 3)}
+            f = _bg_path(desc); tmp = f.with_name(f.stem + ".tmp.png")
+            if not cv2.imwrite(str(tmp), bg): raise RuntimeError(f"could not write {tmp}")
+            tmp.replace(f)
+            cfg = _front_depth_cfg(); cfg["background"] = desc; store_settings("front_depth", cfg)
+            note = ("It covers every auto-tune shift, so it stays valid after a tune." if len(desc["shifts"]) > 1 else
+                    "Taken at the current shift only (no advanced mode): store it again after changing the shift.")
+            out = {"ok": True, "msg": f"depth background stored ({desc['valid_frac']:.0%} of the frame has depth). {note} "
+                                      "Store it again if the camera, table or plates move.", "background": desc}
+    except Exception as e:
+        out = {"ok": False, "msg": f"background capture failed: {e}"}
+    finally:
+        try:
+            if di.get("advanced") and c.depth_info().get("shift") != orig: c.set_shift(orig); _fresh_depths(c, 1)
+        except Exception: pass
+        release()
+        sync_inhand()
+    S.say(out["msg"], out["ok"])
+    return {**out, "status": _bg_state()}
+
+
+@app.post("/depth/background/clear")
+def depth_background_clear():
+    if TUNE["running"]: return {"ok": False, "msg": "depth auto-tune running"}
+    cfg = _front_depth_cfg(); cfg.pop("background", None); store_settings("front_depth", cfg)
+    sync_inhand(); S.say("depth background cleared")
+    return {"ok": True, "status": _bg_state()}
 
 
 @app.post("/depth/reset")
@@ -992,6 +1109,9 @@ if __name__ == "__main__":
         srouter = sorter.make_router(S, ARM, ACTX, crouter.collector, DATA, ROOT)
         app.include_router(srouter)
         JOBS.update(arm=ARM, collector=crouter.collector, sorter=srouter.sorter)    # depth auto-tune exclusivity
+        import feed                                                                 # hand-feed anomaly capture (/anomaly)
+        frouter = feed.make_router(S, ARM, ACTX, crouter.collector, DATA, JOBS)
+        app.include_router(frouter)
         if MOCK: mock_hw.attach(app, S, ARM, crouter.collector, srouter.sorter)
         print(f"control UI: http://127.0.0.1:{PORT}/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
     except Exception as e:

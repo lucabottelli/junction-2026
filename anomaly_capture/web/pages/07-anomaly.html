@@ -9,10 +9,36 @@
  <div class="callout warn an-rule"><svg class=i><use href="#i-alert"/></svg><span><b>Capture all good data before drawing any cross.</b> The pen is permanent: once a block has a cross it can never give good images again.</span></div>
 
  <div class=todo><div class=todo-h>What to do</div><ol>
-  <li><span><b>Switch on the WP2 photos</b> under <a href="/record">Record picks</a> → Options. <span id=an-ph2></span></span></li>
-  <li><span><b>Record every clean block with label Good</b> until it has at least 60 in-hand images.</span></li>
-  <li><span><b>Only then draw crosses</b> of different sizes and record 10–20 images per block with label Defect.</span></li>
+  <li><span><b>Hand-feed below:</b> pick the block and Good, press Get ready, put the block in the open clamp, press Close clamp. The arm photographs it at every WP2 pose and comes back open.</span></li>
+  <li><span><b>Turn the block between handlings</b> (another face to the camera, other grip height) and repeat until each block has at least 60 good images.</span></li>
+  <li><span><b>Only then draw crosses</b> of different sizes and capture 10–20 images per block with label Defect.</span></li>
  </ol></div>
+
+ <section class="sec an-feed">
+  <div class=sec-h><h2>Hand-feed <em>capture</em></h2><p>Rest pose, clamp open → block in → Close clamp → photos at WP2 → back, clamp open.</p></div>
+  <div class=split>
+   <div class=stack>
+    <div class=card>
+     <div class=an-frow><span class=an-flab>Block</span><div class="seg sm" id=an-fbrick></div></div>
+     <div class=an-frow><span class=an-flab>Block is</span><div class=seg id=an-flabel></div><span class="muted small" id=an-ffolder></span></div>
+     <div class=an-frow><span class=an-flab>Rest pose</span><div class="seg sm" id=an-frest></div></div>
+     <div class=an-frow><span class=an-flab>WP2 poses</span><span class=ink2 id=an-fposes>–</span></div>
+     <div class=an-frow><span class=an-flab>Extra angles</span><span class=row><button class="btn sm" onclick="anTilts('-25,-40')">Lower face (−25°, −40°)</button><button class="btn sm" onclick="anTilts('-25')">One tilt (−25°)</button><button class="btn sm ghost" onclick="anTilts(0)">Remove</button></span></div>
+     <div class="row an-fbtns">
+      <button class=btn id=an-fready onclick="anReady()">Get ready</button>
+      <button class="btn primary" id=an-fclose onclick="anClose()">Close clamp</button>
+      <button class="btn ghost" id=an-frelease onclick="anRelease()">Open clamp</button>
+     </div>
+    </div>
+    <div class=an-fmsg id=an-fmsg>Loading…</div>
+    <div id=an-fphotos></div>
+   </div>
+   <div class=stack>
+    <div class=feed><img id=an-flast alt=""><div class=nofeed id=an-fnone>No photo yet</div></div>
+    <div class="muted small" id=an-fcap>Last photo, depth-masked (grey = background removed).</div>
+   </div>
+  </div>
+ </section>
 
  <div class=kpis id=an-kpis></div>
 

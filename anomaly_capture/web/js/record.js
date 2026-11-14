@@ -105,7 +105,7 @@ function precheck(c){const cfg=c.cfg||{},ph2=cfg.phase2,rg=cfg.regrasp;let nNo=0
  let h=it(A&&A.connected?'ok':'no','Arm connected','/connect')+it(taught('home')?'ok':'no','Start pose taught','/waypoints')+it(taught('wp1')?'ok':'no','Waypoint 1 taught','/waypoints')
   +it(isFull(cfg.act_roi&&cfg.act_roi.top)?'no':'ok','Top-camera crop set to the table','/crop')
   +it(taught('drops')?'ok':'opt',taught('drops')?'Reset spots taught: random drop':'No reset spots: put back where picked','/waypoints');
- if(ph2)h+=it(taught('wp2_above')&&taught('wp2')?'ok':'no','Photos on: above WP2 + WP2 taught','/waypoints');
+ if(ph2)h+=it(taught('wp2')?'ok':'no','Photos on: WP2 taught','/waypoints');
  if(ph2&&rg)h+=it(taught('tape_above')&&taught('tape_place')?'ok':'no','Re-grip on: tape spot taught','/waypoints');
  h+=`<div class="small muted rc-also">Also: block on the orange plate, leader arm within reach and resting in its rest position.</div>`;
  setH('precheck',h);

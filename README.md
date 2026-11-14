@@ -18,6 +18,10 @@ the hardware, the plan and the next steps.
 | `anomaly_capture/coverage.py` | Shape-agnostic bookkeeping of which surface directions have been seen, and the photo / re-grip plan |
 | `anomaly_capture/scorer.py`, `score_worker.py` | Anomaly scoring: the model runs in the Anomalib venv as a persistent worker process |
 | `anomaly_capture/train_anomaly.py` | Train + export one anomaly model per brick and camera from the `*_crop.png` images (run with the Anomalib venv) |
+| `anomaly_capture/policy.py` | Phase 6: runs a trained ACT export (OpenVINO on CPU / GPU / NPU) as the autonomous pick, `pick = ACT` on `/sort` |
+| `anomaly_capture/anomaly_pipeline.sh`, `eval_anomaly.py`, `synth_data.py` | One command per brick: train, export, evaluate on held-out episodes, write thresholds; synthetic data for testing |
+| `bench/` | Phase 7: latency, power and temperature per model and device, report for the notes (`bench/README.md`) |
+| `anomaly_capture/mock_hw.py`, `tests/`, `Makefile`, `docs/DEV.md` | Mock station (`make mock`), tests (`make test`), no hardware needed |
 | `anomaly_capture/sim_test.py` | Hardware-free test of the inspection logic: `python3 anomaly_capture/sim_test.py` |
 | `anomaly_capture/prep.py` | Image preprocessing shared by collection, export and the future runtime (crops, depth background mask) |
 | `anomaly_capture/ui.py` | The single web page |

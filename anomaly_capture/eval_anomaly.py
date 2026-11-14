@@ -238,7 +238,7 @@ class Runner:
         try: self.s.score(model, f, device); return device
         except Exception as e:
             if device == "CPU": raise
-            print(f"WARNING: {Path(model).parent.parent.parent.name} does not run on {device} ({str(e)[:120]}): scoring on CPU")
+            print(f"WARNING: {Path(model).parent.parent.parent.name} does not run on {device} ({' '.join(str(e).split())[:160]}): scoring on CPU")
             return "CPU"
 
     def heat(self, model, f, device, out):
@@ -254,7 +254,7 @@ class Runner:
                 ms.append(r["ms"]); wall.append((time.perf_counter() - t0) * 1000)
             return {"device": device, "load_ms": r0.get("load_ms"), "infer_ms": latency_stats(ms), "end_to_end_ms": latency_stats(wall)}
         except Exception as e:
-            return {"device": device, "error": str(e)[:300]}
+            return {"device": device, "error": " ".join(str(e).split())[:300]}
 
     def close(self): self.s.close()
 

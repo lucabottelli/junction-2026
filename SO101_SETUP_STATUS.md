@@ -11,7 +11,7 @@
 
 Running log of the setup, the decisions we made and the problems we fixed. It's written so it can feed straight into the final report.
 
-Last updated: 2026-11-14 04:30 (EET)
+Last updated: 2026-11-14 night (overnight build, see §7.0 and decisions 23–26)
 Challenge guide: https://github.com/open-edge-platform/physical-ai-studio/blob/junction2026/JUNCTION2026.md
 
 ---
@@ -25,8 +25,8 @@ Challenge guide: https://github.com/open-edge-platform/physical-ai-studio/blob/j
 | 3. Configure Studio | ✅ Done | Project, 2 robots, 3 cameras, and a "test" environment with teleop |
 | 4. Anomaly detection (Anomalib) | 🟡 Capturing | Capture tool built (decisions 12–13); backgrounds set; the next job is collecting about 150 good and 20–30 defect images. |
 | 5. Record demos and train a policy | ⏳ Next | 0 datasets so far. Plan: ACT trained locally on the Intel GPU. |
-| 6. Close the loop | ⏳ Not started | |
-| 7. Optimize on Intel hardware | 🔴 NPU not usable yet | NPU user-space driver missing. See §6. |
+| 6. Close the loop | 🟡 Built, untested on the arm | ACT pick → WP1 → inspect → sort runs end to end on the mock station (decision 23). Needs a trained ACT export and a first slow run on the real arm. |
+| 7. Optimize on Intel hardware | 🟡 Harness ready, NPU driver missing | `bench/run_all.sh` measures latency, power and temperature per device and writes the §9 rows (decision 24). Run on CPU only so far. NPU driver still to install (§6). |
 
 ---
 
@@ -482,6 +482,33 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **No API behaviour changed.** Built by 6 parallel agents (foundation + 5 page groups), which sent only GET requests and moved nothing. The buttons were not click-tested on the robot.
     - **Noticed while building:** the live **wrist** view shows the room and people at the top of the image. The ACT policy can therefore still see background movement through the wrist camera. Consider masking or cropping the top of the wrist image (in `prep.py`, so training and runtime use the same image).
 
+
+23. **Autonomous pick (phase 6) is built: pick = ACT on `/sort`** (2026-11-14 night, built overnight without hardware). Code: `anomaly_capture/policy.py`, `sorter.pick_act`, test `tests/test_policy.py`, sim check `sim/act_loop.py`.
+    - **Loading:** physicalai `InferenceModel(export_dir, backend, device)`, the same call Studio's model worker makes; a direct OpenVINO / ONNX Runtime path takes over if physicalai is missing. Devices CPU / GPU / NPU / AUTO.
+    - **No training/serving skew:** the observation is built by the same functions the dataset export uses (`export_act.normalize`, `prep.act_policy_image`: crop → JPEG q93 → decode → RGB). A test checks byte equality. The page warns when the current policy crop differs from the crop of the newest recorded episode.
+    - **Loop:** 30 Hz; modes `chunk` (Studio's "Run model" behaviour, default), `async`, `ensemble` (ACT temporal ensembling).
+    - **Safety:** targets go through the arm's own rate-limited loop; body targets stay within 25° of the real position; STOP is checked every tick and again right before each write; a blocked arm or a camera frame older than 0.5 s ends the pick.
+    - **Hand-off:** the collector's stall rule (now `collect.GraspDetector`), then the scripted rise and carry to WP1. Timeout or missed grasp → let go, back to start, retry; after the last retry the cycle is logged as aborted and the page asks for help.
+    - **Evidence for free:** inference p50/p95 per pick are written to the cycle log (`act_infer_ms_p50`, `act_infer_ms_p95`, `act_attempts`).
+    - **Assumed, not seen:** the export layout (`<id>/exports/<backend>/manifest.json`, inputs `state` [1,6] + `images.top` / `images.wrist` [1,480,640,3] uint8 RGB, output `action` [1,n,6]) comes from reading Studio's and physicalai's source, not from a real export.
+    - **Known weak spot:** in the MuJoCo check (expert wrapped as a policy, 6 tries) 4 picks were detected correctly, 1 brick was out of reach, and **1 real grasp was never detected** (timed out). If this shows on the arm, also accept "`holding()` true for 0.5 s" as the hand-off. Not built yet; G forces the hand-off meanwhile.
+
+24. **Measurement harness (phase 7): `bench/`** (2026-11-14 night). One command, `bench/run_all.sh`, finds the anomaly models and the Studio policy exports, benchmarks each on every device (CPU, GPU, NPU, AUTO; latency and throughput hints; FP16 and INT8), samples power (RAPL) and temperature while it runs, and writes `bench/results/REPORT.md`, charts and `section9_rows.md` for §9. `bench/cycle_stats.py` adds cycle time, accuracy and cascade share from the sorter's logs. Runbook: `bench/README.md`.
+    - Verified on CPU only, with tiny models and a fake sysfs tree. GPU, NPU and the real sensors are untested. The NPU and xe sysfs file names were taken from the kernel source.
+    - RAPL counters are root-only: after every reboot run the `chmod` in `bench/README.md`.
+    - **INT8 uses the Anomalib venv:** installing nncf into Studio's venv would downgrade numpy.
+
+25. **Anomaly pipeline: one command per brick and camera** (2026-11-14 night). `anomaly_capture/anomaly_pipeline.sh <brick> [cam]` trains PatchCore (main) + EfficientAd (fast), exports OpenVINO FP16, evaluates through the run-time path (`scorer.py` → `score_worker.py`) on held-out **episodes**, and writes `thresholds.json` where the sorter reads it. `eval_anomaly.py --compare` is the "does this change earn its place" table (decision 9). `synth_data.py` writes a synthetic `training_images/` in the station's format for testing.
+    - **Three bugs fixed that would have cost time on the station:** PatchCore exported with a fixed batch of 2 (the worker feeds 1 image); Anomalib clamps exported scores to [0,1], so hard goods and defects tied at 1.000 and thresholds could not separate them (now unclamped, same scale); EfficientAd would have crashed (it needs train batch size 1).
+    - **Split:** by episode `(run, cycle)`, about 20 % of good episodes held out, defects never trained on.
+    - **Verified** end to end with real Anomalib on CPU, on synthetic images with untrained backbones (the weight downloads were blocked there). Those numbers test the pipeline only and say nothing about detection quality.
+    - **Check on a real image:** `prep.fill_holes` may fill a background hole enclosed by the jaws and the brick, letting people in the background into the crop. Look at one `_masked.jpg`.
+    - Measured cross sizes go in `training_images/defect_sizes.jsonl` to get the detection-rate-against-size curve.
+
+26. **Mock station, tests and CI** (2026-11-14 night). `make mock` runs the real control server with simulated arms, cameras and Anomalib (`anomaly_capture/mock_hw.py`, `JUNCTION_MOCK=1`) on port 7871. All data goes to `mock_data/`, with waypoints pre-taught, so nothing of the station's is touched. `make test` (fast, about 2 min), `make test-flows` (collect + sort end to end with STOP and recovery, about 11 min), `make test-ui` (Chromium smoke test with screenshots). GitHub Actions runs them on every push. See `docs/DEV.md`.
+    - **Real-hardware path changes to review once on the station** (untestable here): `capture.py` imports `pyrealsense2` only when not in mock mode, reads the port from `JUNCTION_PORT` (default 7870) and calls `mock_hw` only in mock mode; `arm.py` imports lerobot only when not in mock mode; `collect.py`'s export passes `--episodes` explicitly (same folder as before).
+    - `sim_test.py` used to overwrite `anomaly_capture/sort_settings.json` on every run; fixed.
+
 ---
 
 ## 5. Issues and fixes log
@@ -533,6 +560,37 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 
 ## 7. Next steps
 
+### 7.0 Morning flow (built overnight 2026-11-14; do these in order)
+
+Everything below was built and tested without hardware. Nothing has run on the real arm, cameras, iGPU or NPU yet.
+
+1. **Get the code and check the install** (5 min):
+   ```bash
+   cd ~/junction26 && git pull          # or: git fetch && git checkout claude/stoic-fermat-r030it
+   PY=~/physical-ai-studio/application/backend/.venv/bin/python
+   $PY anomaly_capture/sim_test.py
+   $PY -m pip install pytest httpx && $PY -m pytest tests -q -m "not slow and not ui"
+   ```
+2. **Start the tool once and confirm the cameras and the arm still come up** (`anomaly_capture/restart.sh`). This is the first run of the changed import lines in `capture.py` / `arm.py` (decision 26). If it fails, `git diff be90d9f -- anomaly_capture/capture.py anomaly_capture/arm.py` shows the few lines.
+3. **NPU driver + sensors** (§6, then `bench/README.md`): `$PY -m bench.devices` should say "NPU: OK"; `$PY -m bench.sensors --idle 10` should show package watts after the RAPL `chmod`.
+4. **Collect** as planned in step 5 below (pick demos per brick, then WP2 photos, then crosses).
+5. **Train ACT** in Studio on the XPU and export to OpenVINO. Then, without the arm:
+   ```bash
+   $PY anomaly_capture/policy.py --list
+   $PY anomaly_capture/policy.py --model ~/.local/share/physicalai/models/<id> --device GPU --bench 100   # also CPU, NPU
+   ```
+   The printed inputs must be `images.top`, `images.wrist` and `state`.
+6. **Anomaly models:**
+   ```bash
+   ~/anomalib/.venv/bin/python anomaly_capture/train_anomaly.py --brick red --dry-run   # check the episode split
+   anomaly_capture/anomaly_pipeline.sh red          # front camera
+   anomaly_capture/anomaly_pipeline.sh red wrist    # tape-spot top photo
+   ~/anomalib/.venv/bin/python anomaly_capture/eval_anomaly.py --brick red --compare --device GPU
+   ```
+7. **First autonomous cycle:** `/sort` → Pick = ACT policy, choose the export, device GPU, speed 0.5, 1 object, judge MANUAL. Keep a hand on Space; press it during the first pick to confirm the arm freezes. Then judge = MODEL, cascade on.
+8. **Evidence:** close the camera previews, run `bench/run_all.sh` (about 15–25 min, `--quick` about 5; both estimates), run sorting sessions, then `bench/run_all.sh --report-only` and paste `bench/results/section9_rows.md` into §9.
+
+
 1. [x] Mount the overhead D415 above the workspace (done; about 66 cm, top-down). The setup has been locked since 2026-11-14 ≈01:15.
 2. [ ] Add a read-only Hugging Face token in Settings → General → Hugging Face.
 3. [ ] Install the NPU driver (§6).
@@ -554,7 +612,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
    5. [ ] Set the top-photo crop (wrist camera, object lying on the tape spot) **before collecting more data**.
    6. [ ] Run with **pick = hand-feed, judge = MANUAL**: defect on a side, defect under a finger, defect on top, all clean. Try a long brick too.
    7. [ ] After the first anomaly models exist (front + wrist): judge = MODEL → calibrate → run; compare devices (CPU, GPU, NPU) and the cascade.
-7. [ ] **Later phases (not built yet):**
+7. [ ] **Later phases (phases 3–7 are now built, see decisions 20 and 23–25; the list below is the original plan):**
    1. **Phase 3, decision at WP2:** anomaly score per brick (the colour selects the model), with a threshold from the defect images. Measure the smallest cross detected.
    2. **Phase 4, sort:** WP2 → good plate or defect plate (scripted waypoints with the gripper still locked, then release), then back to the start pose.
    3. **Phase 5, all faces:** the cross can be on any face. Add more WP2 views (wrist roll and tilt for 2 sides + bottom), the top-camera check of the upward face before the pick, and a set-down + 90° regrasp for the 2 gripped faces, only if still clean. Stop as soon as a cross is found (decision 14).

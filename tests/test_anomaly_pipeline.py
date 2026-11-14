@@ -224,9 +224,14 @@ def test_compare_variants(ds, fake_anomalib):
 
 
 # ---------------------------------------------------------------- optional: real Anomalib end to end (slow)
+def _clean_env():
+    return {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "ANOMALIB_PY")}
+
+
 def _anomalib_python():
     for p in [os.environ.get("ANOMALIB_PY"), ROOT / ".venv-anomalib/bin/python", Path.home() / "anomalib/.venv/bin/python"]:
-        if p and Path(p).exists() and subprocess.run([str(p), "-c", "import anomalib"], capture_output=True).returncode == 0:
+        # torch too + a clean env: other tests (sim_test fakes) leave ANOMALIB_PY/PYTHONPATH pointing at a FAKE anomalib
+        if p and Path(p).exists() and subprocess.run([str(p), "-c", "import anomalib, torch"], capture_output=True, env=_clean_env()).returncode == 0:
             return Path(p)
     return None
 
@@ -240,10 +245,11 @@ def test_real_anomalib_end_to_end(tmp_path, monkeypatch):
     synth_data.generate(data, bricks=("red",), n_good=14, n_defect=6, cams=("front",), seed=11, raw=False)
     r = subprocess.run([str(py), str(AC / "train_anomaly.py"), "--data", str(data), "--models", str(tmp_path / "models"),
                         "--brick", "red", "--model", "padim", "--no-pretrained", "--image-size", "96", "--device", "cpu"],
-                       capture_output=True, text=True, timeout=900)
+                       capture_output=True, text=True, timeout=900, env=_clean_env())
     assert r.returncode == 0, r.stderr[-3000:]
     mdir = tmp_path / "models" / "front" / "red_padim"
     assert (mdir / "weights" / "openvino" / "model.xml").exists() and (mdir / "model_card.json").exists()
+    monkeypatch.delenv("PYTHONPATH", raising=False)          # the score worker must see the REAL anomalib
     monkeypatch.setattr(E.scorer_mod, "ANOMALIB_PY", py)
     res = E.evaluate(mdir, data, "CPU", ("CPU",))
     assert res["n_good_photos"] > 0 and res["photo"]["auroc_all_defect_photos"] is not None

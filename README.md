@@ -14,6 +14,11 @@ the hardware, the plan and the next steps.
 | `anomaly_capture/arm.py` | Follower/leader control, teach & replay waypoints, safety (STOP, rate limits, blocked detection) |
 | `anomaly_capture/collect.py` | Phase 1 (teleop pick + auto carry to WP1, recorded for ACT) and phase 2 (WP2 front-camera images) |
 | `anomaly_capture/export_act.py` | Cleans the raw demos (rejects fumbles, trims, de-pauses, speeds up, smooths) and writes a Studio/LeRobot dataset |
+| `anomaly_capture/sorter.py` | Phases 3-5: inspect the whole surface of the held object (any shape), stop at the first defect, sort to the good/defect plate; manual judge, Anomalib model or fast→accurate cascade |
+| `anomaly_capture/coverage.py` | Shape-agnostic bookkeeping of which surface directions have been seen, and the photo / re-grip plan |
+| `anomaly_capture/scorer.py`, `score_worker.py` | Anomaly scoring: the model runs in the Anomalib venv as a persistent worker process |
+| `anomaly_capture/train_anomaly.py` | Train + export one anomaly model per brick and camera from the `*_crop.png` images (run with the Anomalib venv) |
+| `anomaly_capture/sim_test.py` | Hardware-free test of the inspection logic: `python3 anomaly_capture/sim_test.py` |
 | `anomaly_capture/prep.py` | Image preprocessing shared by collection, export and the future runtime (crops, depth background mask) |
 | `anomaly_capture/ui.py` | The single web page |
 | `anomaly_capture/cam_settings.json`, `routines.json`, `collect_settings.json` | Locked camera settings, taught waypoints, collection settings (station-specific) |

@@ -64,7 +64,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px}
  <span class=small>arm: <b id=mode>-</b></span>
 </div>
 <nav><a href="#setup">1 Setup</a><a href="#teach">2 Teach</a><a href="#views">3 Views</a><a href="#collect">4 Teach the pick</a><a href="#episodes">5 Episodes</a>
-<a href="#export">6 Train ACT</a><a href="#anomaly">7 Anomaly data</a><a class=fut href="#vision">ACT + vision</a><a class=fut href="#p3">Phase 3</a><a class=fut href="#p4">Phase 4</a><a class=fut href="#p5">Phase 5</a><a class=fut href="#p6">Phase 6</a><a class=fut href="#p7">Phase 7</a></nav>
+<a href="#export">6 Train ACT</a><a href="#anomaly">7 Anomaly data</a><a class=fut href="#vision">ACT + vision</a><a href="#sort">8 Inspect + sort</a><a class=fut href="#p6">Phase 6</a><a class=fut href="#p7">Phase 7</a></nav>
 <div id=amsg></div></header>
 <main>
 
@@ -206,18 +206,67 @@ Target per brick: ≥60 good, 10-20 defect (crosses of different sizes).</p>
 <li>The finder also checks after the pick that the right block is in the gripper (wrist camera).</li></ul>
 <div class=row><button disabled>learn block colours</button><button disabled>show block finder on the top view</button></div></section>
 
-<section id=p3 class=future><h2><span class=n>3</span>Phase 3: decide good / defect at WP2 <span class="tag later">later</span></h2>
-<p class=lead>Train one PatchCore model per brick on the masked WP2 <i>good</i> images (the brick's colour picks the model), set the threshold with the defect images, measure the smallest cross detected, export to OpenVINO.
-Here: a train button, the live anomaly score + heat-map at WP2, and the threshold slider.</p>
-<div class=row><button disabled>train anomaly models</button><button disabled>live score at WP2</button></div></section>
-
-<section id=p4 class=future><h2><span class=n>4</span>Phase 4: sort <span class="tag later">later</span></h2>
-<p class=lead>From WP2 to the good plate or the defect plate (scripted, clamp still locked), release, back to the start pose. Here: two more waypoints to teach.</p>
-<div class=row><button disabled>save good-plate pose</button><button disabled>save defect-plate pose</button></div></section>
-
-<section id=p5 class=future><h2><span class=n>5</span>Phase 5: check every face <span class="tag later">later</span></h2>
-<p class=lead>The cross can be on any of the 6 faces: top camera checks the face pointing up before the pick; more WP2 views (wrist turned / tilted) for 2 sides + bottom; only if still clean,
-set down turned 90° and regrasp to see the 2 gripped faces. Stop as soon as a cross is found.</p></section>
+<section id=sort><h2><span class=n>8</span>Inspect the whole surface + sort (phases 3-5) <span class="tag now">new</span></h2>
+<p class=lead>The robot shows the held object to the front camera. <b>A defect on any photo → straight to the DEFECT plate</b>, the rest is skipped.
+An object goes to the <b>GOOD plate only after its whole surface was seen clean</b>: first what is visible as picked, then it is set down on the tape spot, photographed from above
+(wrist camera) and gripped again turned 90°, so what was under the fingers becomes visible. Works for <b>any shape</b> (cube, long brick, triangle, cylinder): the page tracks which
+surface directions have been seen, not named faces. Anything uncertain or unseeable is never called good.</p>
+<div class=grid2>
+ <div class=card><h3>1 · Teach the two plates</h3><p>Holding an object, ~3 cm above each plate (the robot opens the gripper there). "Above" = high enough to travel without hitting anything (optional, estimated from WP1 if missing).</p>
+  <div class=grid2>
+   <div><b class=ok>GOOD plate</b><div class=small>above · sort_good_above</div><div id=s-sort_good_above></div><button class=sm onclick="p('/arm/wp/add?routine=sort_good_above&single=true')">save above</button>
+    <div class=small style="margin-top:6px">release pose · sort_good</div><div id=s-sort_good></div><button class="sm g" onclick="p('/arm/wp/add?routine=sort_good&single=true')">save release</button></div>
+   <div><b class=err>DEFECT plate</b><div class=small>above · sort_defect_above</div><div id=s-sort_defect_above></div><button class=sm onclick="p('/arm/wp/add?routine=sort_defect_above&single=true')">save above</button>
+    <div class=small style="margin-top:6px">release pose · sort_defect</div><div id=s-sort_defect></div><button class="sm d" onclick="p('/arm/wp/add?routine=sort_defect&single=true')">save release</button></div>
+  </div>
+  <h3 style="margin-top:14px">Top photo of the released object (tape spot)</h3>
+  <p>While the object lies on the tape spot with the gripper open above it, this camera photographs its top (the side the gripper hides while holding). Set the crop so the object fills the picture; the same crop is used for the training photos.</p>
+  <div class=row><label class=small><input type=checkbox id=s-rel> use it</label> camera <select id=s-relcam><option>wrist</option><option>top</option></select>
+   <span id=s-relstate class=small></span></div>
+  <div class=row>crop % : x <input id=r-x0 type=number min=0 max=100 style="width:60px">–<input id=r-x1 type=number min=0 max=100 style="width:60px">
+   y <input id=r-y0 type=number min=0 max=100 style="width:60px">–<input id=r-y1 type=number min=0 max=100 style="width:60px"><button class=sm onclick="setRoi()">set crop</button></div>
+  <img id=s-relimg class=cam style="max-width:220px"></div>
+ <div class=card><h3>2 · What does each WP2 photo pose show?</h3>
+  <p>Seen from the camera, relative to the <b>gripper</b>: <b>front</b> = free side facing the camera, <b>back</b> = the opposite free side (wrist turned 180°), <b>down</b> = the side that lay on the table (gripper pointing at the camera),
+  <b>up</b> = the palm side (usually hidden by the gripper: use the top photo instead). Two ticks = a diagonal view. Add WP2 photo poses in section 2 until the surface is 100 % covered. You need at least front, back and down.</p>
+  <table id=facetab></table><div id=cov style="margin-top:8px"></div>
+  <div class=row style="margin-top:8px"><span class=small>a photo covers surfaces tilted up to</span><input id=s-vd type=number min=30 max=80 style="width:60px"><span class=small>° away · fingers hide ±</span><input id=s-fd type=number min=10 max=60 style="width:60px"><span class=small>° · max re-grips</span><input id=s-mr type=number min=0 max=4 style="width:50px"></div></div>
+</div>
+<div class=grid2 style="margin-top:12px">
+ <div class=card><h3>3 · Run</h3>
+  <div class=row><span style="width:120px">Pick</span><select id=s-pick><option value=handfeed>hand-feed (you put the object in the gripper, G)</option><option value=teleop>teleop with the leader</option><option value=act disabled>ACT policy (phase 6, later)</option></select></div>
+  <div class=row><span style="width:120px">Defect judge</span><select id=s-judge><option value=manual>MANUAL: you click clean/defect (test the motions now)</option><option value=model>Anomalib model (OpenVINO)</option></select></div>
+  <div class=row><span style="width:120px">Brick model</span><select id=s-brick></select><span class=small>models/&lt;cam&gt;/&lt;brick&gt;/…/model.xml</span></div>
+  <div class=row><span style="width:120px">Device</span><select id=s-dev><option>GPU</option><option>CPU</option><option>NPU</option><option>AUTO</option></select>
+   <label class=small><input type=checkbox id=s-casc> cascade: fast model first on</label><select id=s-fdev><option>NPU</option><option>GPU</option><option>CPU</option></select></div>
+  <div class=small style="margin:-4px 0 8px 128px">Cascade: <code>&lt;brick&gt;_efficientad</code> answers first; only photos it is unsure about go to the main model. It is used only after it has been calibrated.</div>
+  <div class=row><span style="width:120px">Thresholds</span>clean ≤ <input id=s-tl type=number step=0.01 min=0 max=1 style="width:75px"> · defect ≥ <input id=s-th type=number step=0.01 min=0 max=1 style="width:75px">
+   · retakes <input id=s-rt type=number min=0 max=5 style="width:55px"></div>
+  <div class=small style="margin:-4px 0 8px 128px">A model folder's thresholds.json (from calibration) overrides these. In between → retake, still in between → DEFECT plate (fail-safe).</div>
+  <div class=row><label class=small><input type=checkbox id=s-inc> allow incomplete coverage (testing only: such objects always go to DEFECT)</label></div>
+  <div class=row><span style="width:120px">Objects</span><input id=s-n type=number value=1 min=1 style="width:80px">
+   <button class="g big" onclick="p('/sort/start?n='+$('s-n').value)">▶ START INSPECT + SORT</button></div>
+  <div id=s-pre class=small></div></div>
+ <div class=card><h3>Live</h3>
+  <div id=s-verdict style="font:800 20px system-ui;margin-bottom:6px">-</div>
+  <div id=s-faces class=row></div>
+  <div id=s-judgebox style="display:none;margin:8px 0"><img id=s-judgeimg class=cam style="max-width:360px">
+   <div class=small id=s-judgecap></div>
+   <div class=row style="margin-top:6px"><button class="g big" onclick="p('/sort/judge/clean')"><span class=kbd>C</span> CLEAN</button>
+    <button class="d big" onclick="p('/sort/judge/defect')"><span class=kbd>D</span> DEFECT</button><button class=big onclick="p('/sort/judge/unsure')"><span class=kbd>U</span> UNSURE</button></div></div>
+  <div class=row><button class=g onclick="p('/sort/flag/grasped')"><span class=kbd>G</span> object in the fingers: close</button>
+   <button onclick="p('/sort/flag/next')"><span class=kbd>N</span> next</button></div>
+  <table id=s-steps></table></div>
+</div>
+<div class=grid2 style="margin-top:12px">
+ <div class=card><h3>Results</h3><div id=s-tot class=small></div><table id=s-hist></table><div id=s-photos style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div></div>
+ <div class=card><h3>Calibrate the thresholds (after training a model)</h3>
+  <p>Scores the saved <code>*_crop.png</code> of this brick with the deployed model through the same path as the live run. Good photos held out from training set the clean level;
+  for each defect brick the photo with the highest score counts (the cross is on one face only). Writes <code>thresholds.json</code> next to the model.</p>
+  <div class=row><button onclick="cal('front',false)">front model</button><button onclick="cal('',false,true)">top-photo model</button><button onclick="cal('front',true)">fast front model</button></div>
+  <pre id=s-cal style="margin-top:8px">-</pre></div>
+</div>
+</section>
 
 <section id=p6 class=future><h2><span class=n>6</span>Phase 6: run autonomously <span class="tag later">later</span></h2>
 <p class=lead>Our own runtime: ACT picks (same crops as training) → grip detected → scripted carry to WP1 and WP2 → anomaly decision → sort → next brick. Safe stop on this page.
@@ -239,7 +288,7 @@ const $=id=>document.getElementById(id),v=id=>$(id).value.trim();
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let q=Promise.resolve(),A=null,C=null;
 function p(u){q=q.then(()=>fetch(u,{method:'POST'}).then(r=>r.json()).then(()=>refresh()).catch(e=>{$('amsg').textContent='ERROR: '+e}))}
-function stopAll(){fetch('/collect/stop',{method:'POST'});fetch('/arm/stop',{method:'POST'}).then(refresh)}
+function stopAll(){fetch('/sort/stop',{method:'POST'});fetch('/collect/stop',{method:'POST'});fetch('/arm/stop',{method:'POST'}).then(refresh)}
 function startCol(){if(!v('brick')){alert('type the brick name first');$('brick').focus();return}
  p(`/collect/start?n=${$('n').value}&brick=${encodeURIComponent(v('brick'))}&label=${$('label').value}`)}
 function ex(dry){p(`/collect/export?speedup=${$('x-sp').value}&max_attempts=${$('x-at').value}&name=${encodeURIComponent(v('x-name'))}&dry=${dry}&bricks=${encodeURIComponent($('x-br').value)}`)}
@@ -249,7 +298,7 @@ live('v-top','/collect/view/top',300);live('v-wrist','/collect/view/wrist',300);
 const COL={idle:'#9aa3ad',home:'#ffd23f',match:'#ffb44d',pick:'#ff5252',carry:'#ff5252',capture:'#5fd38d',reset_auto:'#8ab4f8',regrasp:'#5fd38d',reset:'#ff8a3d',done:'#5fd38d',stopped:'#ff6b6b',error:'#ff6b6b'};
 const TXT={idle:'READY',home:'START POSE: robot moving',match:'MATCH THE LEADER TO THE ROBOT',pick:'PHASE 1 ● REC: PICK THE BRICK',carry:'PHASE 1 ● REC: ROBOT → WP1 (hands off)',
  capture:'PHASE 2: WP2 FRONT CAMERA (hands off)',reset_auto:'RESET: robot puts the brick back',regrasp:'PHASE 2: TAPE SPOT, RE-GRIP TURNED 90° (hands off)',reset:'RESET THE SCENE, THEN N',done:'DONE',stopped:'STOPPED',error:'ERROR'};
-const SLOTS=['home','wp1','wp2_above','wp2','tape_above','tape_place','drops'];let slotSig='',cfgShown=false;
+const SLOTS=['home','wp1','wp2_above','wp2','tape_above','tape_place','drops','sort_good_above','sort_good','sort_defect_above','sort_defect'];let slotSig='',cfgShown=false;
 function slotHtml(name,w){if(!w||!w.length)return '<div class=slotempty>not taught yet</div>';
  return '<table>'+w.map((x,i)=>`<tr><td>${esc(x.name)}${x.capture?' 📷':''}</td><td style="text-align:right;white-space:nowrap">
  <button class=sm onclick="p('/arm/wp/${i}/goto?routine=${name}')">go</button> <button class=sm onclick="p('/arm/wp/${i}/update?routine=${name}')">set</button>
@@ -281,14 +330,65 @@ function showCol(c){C=c;const b=$('banner');b.style.background=COL[c.state]||'#9
  const bo='<option value="">all blocks (one model for all)</option>'+br.map(b=>`<option value="${esc(b)}">${esc(b)} only</option>`).join('');
  if($('x-br').dataset.sig!=bo){const cur=$('x-br').value;$('x-br').innerHTML=bo;$('x-br').value=cur;$('x-br').dataset.sig=bo}
  const xl=$('xlog');if(c.export_log&&xl.textContent!=c.export_log){xl.textContent=c.export_log;xl.scrollTop=1e9}}
-function refresh(){return Promise.all([fetch('/arm/status').then(r=>r.json()).then(showArm),fetch('/collect/status').then(r=>r.json()).then(showCol)]).catch(()=>{})}
+
+let SO=null,sortCfgShown=false,faceSig='',photoSig='',roiSig='';
+const SCOL={handfeed:'#ffb44d',home:'#ffd23f',match:'#ffb44d',pick:'#ff5252',carry:'#ff5252',inspect:'#5fd38d',judge:'#ffd23f',regrasp:'#5fd38d',sort_good:'#2fa36b',sort_defect:'#d2582a',help:'#ff8a3d',done:'#5fd38d',stopped:'#ff6b6b',error:'#ff6b6b'};
+const STXT={handfeed:'HAND-FEED: PUT THE OBJECT IN THE GRIPPER, THEN G',home:'START POSE',match:'MATCH THE LEADER',pick:'PICK THE OBJECT (leader)',carry:'ROBOT → WP1',inspect:'INSPECTING',judge:'MANUAL JUDGE: C / D / U',regrasp:'TAPE SPOT: SET DOWN, TOP PHOTO, RE-GRIP TURNED 90°',sort_good:'→ GOOD PLATE',sort_defect:'→ DEFECT PLATE',help:'PUT THE OBJECT BACK, THEN N',done:'INSPECT + SORT DONE',stopped:'STOPPED',error:'ERROR'};
+const RK=['U','D','S1','S2','F1','F2'];
+function chipPct(f,pct,nm,bad){const col=bad?'background:#5a1d10;color:#ff8a5c':pct>=100?'background:#1f3d2b;color:#5fd38d':pct>0?'background:#3d3a1f;color:#ffd23f':'background:#2c323a;color:#9aa3ad';
+ return `<span title="${esc(nm[f]||f)}" style="display:inline-block;padding:2px 8px;border-radius:10px;margin:2px;font-size:12px;font-weight:700;${col}">${f} ${pct}%</span>`}
+function showSort(s){SO=s;
+ if(s.active||(['done','stopped','error','help'].includes(s.state)&&!(C&&C.active))){const b=$('banner');b.style.background=SCOL[s.state]||'#9aa3ad';
+  b.innerHTML=(STXT[s.state]||s.state)+(s.cur&&s.cur.cycle?`  ·  object ${s.cur.cycle}`:'')+`<small>${esc(s.msg)}</small>`}
+ const c=s.cfg,nm=s.region_names;
+ if(!sortCfgShown){sortCfgShown=true;const set=(id,v)=>{$(id).value=v};
+  set('s-pick',c.pick);set('s-judge',c.judge);set('s-dev',c.device);set('s-fdev',c.fast_device);set('s-tl',c.t_low);set('s-th',c.t_high);set('s-rt',c.retries);
+  set('s-vd',c.view_deg);set('s-fd',c.finger_deg);set('s-mr',c.max_regrasps);set('s-relcam',c.release_cam);
+  $('s-inc').checked=c.allow_incomplete;$('s-rel').checked=c.release;$('s-casc').checked=c.cascade;
+  const on=(id,k,f)=>{$(id).onchange=()=>p('/sort/cfg?'+k+'='+encodeURIComponent(f?f($(id)):$(id).value))},chk=e=>e.checked?1:0;
+  on('s-pick','pick');on('s-judge','judge');on('s-dev','device');on('s-fdev','fast_device');on('s-brick','brick');on('s-tl','t_low');on('s-th','t_high');on('s-rt','retries');
+  on('s-vd','view_deg');on('s-fd','finger_deg');on('s-mr','max_regrasps');on('s-relcam','release_cam');on('s-inc','allow_incomplete',chk);on('s-rel','release',chk);on('s-casc','cascade',chk);
+  live('s-relimg','/sort/release_view.jpg',700)}
+ const roi=s.release_roi[c.release_cam]||[0,0,1,1],rs=JSON.stringify([c.release_cam,roi]);
+ if(rs!=roiSig){roiSig=rs;$('r-x0').value=Math.round(roi[0]*100);$('r-y0').value=Math.round(roi[1]*100);$('r-x1').value=Math.round(roi[2]*100);$('r-y1').value=Math.round(roi[3]*100)}
+ $('s-relstate').innerHTML=s.release_on?'<span class=ok>✓ active</span>':c.release?`<span class=warn>✗ not possible: ${s.tape?'camera '+esc(c.release_cam)+' is not live':'tape spot not taught'}</span>`:'off';
+ const opts=['<option value="">all (models/'+esc(c.cam)+'/all)</option>'].concat([...new Set(s.models.filter(m=>m.cam==c.cam&&!/^all$|_(efficientad|padim)$/.test(m.brick)).map(m=>m.brick))].map(b=>`<option>${esc(b)}</option>`));
+ if($('s-brick').dataset.sig!=opts.join()){$('s-brick').innerHTML=opts.join('');$('s-brick').dataset.sig=opts.join();$('s-brick').value=c.brick||''}
+ const fsig=JSON.stringify([s.wp2,c.faces]);
+ if(fsig!=faceSig){faceSig=fsig;$('facetab').innerHTML='<tr><th>WP2 pose</th><th>front</th><th>back</th><th>up</th><th>down</th></tr>'+(s.wp2.map(v=>{const on=c.faces[v]||['front'];
+  return `<tr><td>${esc(v)}</td>`+['front','back','up','down'].map(x=>`<td><input type=checkbox ${on.includes(x)?'checked':''} onchange="setFaces(this.dataset.v)" data-v="${esc(v)}" data-s="${x}"></td>`).join('')+'</tr>'}).join('')||'<tr><td colspan=5 class=slotempty>teach WP2 photo poses first (section 2)</td></tr>')}
+ const pl=s.plan;
+ $('cov').innerHTML=`<div>${RK.map(f=>chipPct(f,pl.regions[f],nm)).join('')}</div>`+
+  (pl.complete?`<div class=ok style="margin-top:4px">✓ the whole surface can be checked: ${pl.photos} photos and ${pl.regrasps} re-grip${pl.regrasps==1?'':'s'} for a clean object</div>`
+   :`<div class=warn style="margin-top:4px">✗ only ${pl.seen_pct} % of the surface can be seen; not fully: ${pl.missing.map(f=>esc(nm[f])).join(', ')}</div>`)+
+  `<div class=small style="margin-top:4px">plan: ${pl.steps.map(x=>x.view?`grip ${x.grip} · ${esc(x.view)}`:`<b>re-grip${x.release_photo?' + top photo':''}</b>`).join(' → ')||'-'}</div>`;
+ const t=n=>((A&&A.all[n]||{}).waypoints||[]).length>0,ok=(x,txt)=>`<span class="${x?'ok':'warn'}">${x?'✓':'✗'} ${txt}</span> · `;
+ $('s-pre').innerHTML=ok(A&&A.connected,'arm')+ok(t('home')&&t('wp1')&&t('wp2'),'home/WP1/WP2')+ok(s.tape,'tape spot')+ok(s.bins.good&&s.bins.defect,'both plates')+ok(pl.complete||c.allow_incomplete,'surface coverage')+
+  ok(c.judge=='manual'||s.models.length>0,c.judge=='manual'?'manual judge':'model found');
+ const cur=s.cur||{},reg=cur.regions||{},st=cur.steps||[];const badf=new Set();st.filter(x=>x.decision&&x.decision!='clean').forEach(x=>(x.shows||[]).forEach(f=>badf.add(f)));
+ $('s-faces').innerHTML=RK.map(f=>chipPct(f,reg[f]||0,nm,badf.has(f))).join('')+(cur.grip?`<span class=small>grip ${cur.grip} · ${cur.seen_pct||0}% of the surface clean</span>`:'');
+ $('s-verdict').innerHTML=cur.verdict?`<span class="${cur.verdict=='good'?'ok':cur.verdict=='defect'?'err':'warn'}">${cur.verdict.toUpperCase()}</span>`:(s.active?'inspecting…':'-');
+ $('s-steps').innerHTML=st.length?'<tr><th>grip</th><th>photo</th><th>shows</th><th>scores</th><th>by</th><th>result</th></tr>'+st.map(x=>`<tr><td>${x.grip}</td><td>${esc(x.view)}${x.kind=='release'?' (top)':''}</td><td>${(x.shows||[]).join(' ')}</td><td>${x.shots.map(h=>h.score==null?'?':(+h.score).toFixed(2)).join(' → ')}${x.shots.some(h=>h.warning)?' <span class=warn title="no depth mask: photo not trusted">⚠</span>':''}</td><td class=small>${esc((x.shots[x.shots.length-1]||{}).decided_by||(x.shots[x.shots.length-1]||{}).judge||'')}</td><td class="${x.decision=='clean'?'ok':x.decision=='defect'?'err':'warn'}">${x.decision||'…'}</td></tr>`).join(''):'';
+ $('s-judgebox').style.display=s.judge?'':'none';if(s.judge){$('s-judgecap').textContent=s.judge_caption;const im=$('s-judgeimg');if(im.dataset.n!=s.judge_n){im.dataset.n=s.judge_n;im.src='/sort/judge.jpg?'+Date.now()}}
+ $('s-tot').innerHTML=`session ${esc(s.session||'-')} · <b class=ok>${s.totals.good} good</b> · <b class=err>${s.totals.defect} defect</b> · <b class=warn>${s.totals.aborted} aborted</b>`;
+ $('s-hist').innerHTML=s.history.length?'<tr><th>#</th><th>verdict</th><th>why</th><th>photos</th><th>s</th><th>ms/inf</th></tr>'+s.history.map(h=>`<tr><td>${h.cycle}</td><td class="${h.verdict=='good'?'ok':h.verdict=='defect'?'err':'warn'}">${h.verdict}</td><td class=small>${esc(h.reason)}</td><td>${h.photos}</td><td>${h.t_auto_s}</td><td>${h.infer_ms_mean??'-'}</td></tr>`).join(''):'';
+ const ps=JSON.stringify(s.photos);if(ps!=photoSig){photoSig=ps;$('s-photos').innerHTML=s.photos.map((l,i)=>`<figure><img src="/sort/photo/${i}?${Date.now()}" style="height:90px;border-radius:4px;display:block">${esc(l)}</figure>`).join('')}
+ const cr=s.calib||{};$('s-cal').textContent=cr.running?'calibrating… '+(cr.progress||''):cr.result?JSON.stringify(cr.result,null,1):'-'}
+function setFaces(v){const sides=[...document.querySelectorAll('#facetab input')].filter(x=>x.dataset.v==v&&x.checked).map(x=>x.dataset.s);p('/sort/faces?view='+encodeURIComponent(v)+'&sides='+sides.join(','))}
+function setRoi(){p(`/sort/release_roi?x0=${$('r-x0').value}&y0=${$('r-y0').value}&x1=${$('r-x1').value}&y1=${$('r-y1').value}`)}
+function cal(cam,fast,rel){const c=rel?SO.cfg.release_cam:cam;p('/sort/calibrate?brick='+encodeURIComponent($('s-brick').value)+'&cam='+c+'&fast='+(fast?'true':'false'))}
+
+function refresh(){return Promise.all([fetch('/arm/status').then(r=>r.json()).then(showArm),fetch('/collect/status').then(r=>r.json()).then(showCol)]).then(()=>fetch('/sort/status').then(r=>r.json()).then(showSort)).catch(()=>{})}
 let rc='';function slow(){fetch('/status').then(r=>r.json()).then(s=>{const k=JSON.stringify(s.recent);if(k!=rc){rc=k;
   $('recent').innerHTML=s.recent.map((l,i)=>`<figure><img src="/recent/${i}?${Date.now()}">${esc(l)}</figure>`).join('')||'<span class=small>none yet</span>'}});
  fetch('/collect/counts').then(r=>r.json()).then(o=>{const ks=Object.keys(o).sort();
   $('cnt').innerHTML='<tr><th>brick</th><th>good</th><th>defect</th></tr>'+(ks.map(b=>`<tr><td>${esc(b)}</td><td class="${o[b].good>=60?'ok':''}">${o[b].good} / 60</td><td class="${o[b].defect>=10?'ok':''}">${o[b].defect} / 10-20</td></tr>`).join('')||'<tr><td colspan=3 class=small>no images yet</td></tr>')})}
 document.onkeydown=e=>{if(e.key==' '||e.key=='Escape'){e.preventDefault();stopAll();return}
  if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)&&e.target.type!='checkbox'&&e.target.type!='range')return;
- const m={g:'grasped',x:'discard',k:'skip',n:'next'}[e.key.toLowerCase()];if(m)p('/collect/flag/'+m)};
+ const kk=e.key.toLowerCase();
+ if(SO&&SO.judge&&['c','d','u'].includes(kk)){p('/sort/judge/'+{c:'clean',d:'defect',u:'unsure'}[kk]);return}
+ if(SO&&SO.active&&['g','n'].includes(kk)){p('/sort/flag/'+(kk=='g'?'grasped':'next'));return}
+ const m={g:'grasped',x:'discard',k:'skip',n:'next'}[kk];if(m)p('/collect/flag/'+m)};
 (function(){let st=null;const pv=$('full-top'),dr=$('dr-full');
  const pos=e=>{const r=pv.getBoundingClientRect();return[Math.max(0,Math.min(r.width,e.clientX-r.left)),Math.max(0,Math.min(r.height,e.clientY-r.top)),r]};
  pv.addEventListener('mousedown',e=>{e.preventDefault();st=pos(e)});

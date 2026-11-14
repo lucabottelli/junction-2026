@@ -342,7 +342,9 @@ def make_router(S, DATA, AVG, say_recent):
         except Exception as e: say(f"ERROR: {e}", False)
 
     # ---- run
-    def capture(cams, label, brick, view, cycle, run_id):
+    def capture(cams, label, brick, view, cycle, run_id, kind="inhand"):
+        """kind="inhand": brick held in front of the camera (depth-masked crop).
+        kind="release": brick lying released on the tape spot, seen from above (fixed crop, prep.release_crop)."""
         shots = S.averaged(cams)
         group = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         files = []
@@ -351,14 +353,21 @@ def make_router(S, DATA, AVG, say_recent):
             p = d / f"{group}_{brick or 'nobrick'}_{view}.png"; cv2.imwrite(str(p), f); files.append(p)
             motion = float(np.abs(cv2.blur(first, (5, 5)) - cv2.blur(last, (5, 5))).mean())
             dep = getattr(S.cams[k], "depth", None); dinfo = None
-            if dep is not None and time.time() - S.cams[k].depth_t < 1.0:
-                dp = d / f"{group}_{brick or 'nobrick'}_{view}_depth.png"; cv2.imwrite(str(dp), dep); files.append(dp)
-                mask, dinfo = prep.inhand_mask(dep)
-                if mask is not None:
-                    mp = d / f"{group}_{brick or 'nobrick'}_{view}_masked.jpg"
-                    cv2.imwrite(str(mp), prep.apply_mask(f, mask), [cv2.IMWRITE_JPEG_QUALITY, 90]); files.append(mp)
+            if dep is not None and time.time() - S.cams[k].depth_t >= 1.0: dep = None
+            if kind == "release":
+                crop, cinfo = prep.release_crop(f, k)             # the exact anomaly-model input (sorter.py uses the same)
+            else:
+                if dep is not None:
+                    dp = d / f"{group}_{brick or 'nobrick'}_{view}_depth.png"; cv2.imwrite(str(dp), dep); files.append(dp)
+                    mask, dinfo = prep.inhand_mask(dep)
+                    if mask is not None:
+                        mp = d / f"{group}_{brick or 'nobrick'}_{view}_masked.jpg"
+                        cv2.imwrite(str(mp), prep.apply_mask(f, mask), [cv2.IMWRITE_JPEG_QUALITY, 90]); files.append(mp)
+                crop, cinfo = prep.inspect_crop(f, dep)           # the exact anomaly-model input (sorter.py uses the same)
+            if cinfo.get("masked"):
+                cp = d / f"{group}_{brick or 'nobrick'}_{view}_crop.png"; cv2.imwrite(str(cp), crop); files.append(cp)
             with open(DATA / "meta.jsonl", "a") as m:
-                m.write(json.dumps({"file": str(p.relative_to(DATA)), "stage": "inhand", "cam": k, "group": group,
+                m.write(json.dumps({"file": str(p.relative_to(DATA)), "stage": kind, "cam": k, "group": group,
                                     "label": label, "brick": brick, "view": view, "cycle": cycle, "run": run_id,
                                     "routine": R["cur"], "joints": {n: int(x) for n, x in A.pos.items()},
                                     "motion": round(motion, 2), "frames_averaged": AVG[k], "time": group,

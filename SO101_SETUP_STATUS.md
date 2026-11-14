@@ -544,6 +544,18 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - Blue ep0001 is 71 s long (pick 66 s, the manual-G hand-off before decision 28), against a median of about 23 s. It's a candidate to leave out of training.
     - **Name it `pink`** when recording (block field on `/record`). The UI swatch is salmon (`#E8877C`; `salmon` works as an alias).
     - **Changed:** the sim brick set (`sim/station.py`: pink 2×2, 6 g; the ridge-roof shape code stays), the mock station (spawns pink, green, blue), `synth_data.py` defaults (pink, green, blue; `red` kept only for the tests), and the "e.g." hints.
+    - **Red data deleted** (2026-11-14 ≈15:00, the user's request):
+      - The real session `20261114_144657_red` (3 saved, 4 failed, 1.7 GB).
+      - The 202 red picks in `episodes_sim/gen2`, leaving 193 blue and 209 green sim picks (12 GB).
+      - Studio's training set `pick-sim604-real1x10` (`datasets/cc7a59ef…`) still contains the red sim picks. It's left as it is and gets replaced by a new export (sim blue/green plus real blue/green/pink) before the real training run.
+      - `episodes_sim_old` (the older wrong-shape sim runs) is untouched.
+    - **Sim regenerated for the new set** (≈15:00, sim session):
+      - **Pink colour calibrated on the live top camera.** The real brick measures RGB ≈ (180, 85, 94) at maximum gain. The sim value is `(0.78, 0.32, 0.29)`, chosen so that after the camera degradation the sim brick has the camera's G/R and B/R ratios, with the same blue bias as the calibrated blue brick. The first guess, (0.91, 0.53, 0.49), rendered too light and too orange.
+      - **Expert with the new set:** 85% (102/120; pink 36/43, blue 41/49, green 25/28). Unchanged, and only successes are kept.
+      - **The remaining gen2 blue/green picks are moved out of the training folder** to `episodes_sim_old/gen2_bluegreen_ridge_distractors` (402 episodes, 12 GB). Their scenes still have the ridge roof as a distractor brick.
+      - **`gen3` (700 attempts, seed 2000000, `-j 8` to leave CPU for `capture.py`)** rebuilds all three bricks with pink in the scene. `export_act.py --sim-episodes ~/junction26/episodes_sim` picks it up as is.
+    - **Pink recorded** (2026-11-14 15:01): `20261114_150142_pink` **30/30** (15 failed attempts skipped: 10 dropped, 5 missed), 4.8 GB. Verified: every episode loads, all 3 cameras, one frame per camera per step; picks 13–25 s, median 18 s.
+    - **Real pick data is complete: blue 30, green 30, pink 30** (90 episodes). Next: export them (plus the sim blue/green picks if mixing) as a new Studio dataset for the ACT run.
     - **Note for the pick policy:** pink and blue are now the same shape and size and differ only in colour. One ACT policy should pick both the same way, and choosing between them ("pick up the pink one") becomes purely a colour problem.
 
 ---

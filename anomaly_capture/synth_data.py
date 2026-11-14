@@ -38,7 +38,8 @@ import prep  # noqa: E402  (the real crop function: synthetic frames go through 
 
 W, H = 1920, 1080
 STUD_PITCH, STUD_D, STUD_H, BRICK_H = 16.0, 9.6, 4.5, 19.2                # Duplo mm
-BRICKS = {"red": {"bgr": (38, 40, 190), "studs": (2, 4), "roof": True},      # 2x4 ridge roof (tent prism, no studs)
+BRICKS = {"pink": {"bgr": (125, 135, 232), "studs": (2, 2), "roof": False},   # salmon 2x2 (replaced the red roof 2026-11-14)
+          "red": {"bgr": (38, 40, 190), "studs": (2, 4), "roof": True},      # 2x4 ridge roof (tent prism, no studs)
           "green": {"bgr": (55, 140, 40), "studs": (2, 3), "roof": False},
           "blue": {"bgr": (165, 85, 25), "studs": (2, 2), "roof": False}}
 INKS = {"black": (28, 28, 30), "blue": (150, 70, 35), "red": (45, 40, 165)}
@@ -231,7 +232,7 @@ def make_defect(rng, faces):
             "stroke_seed": int(rng.integers(1 << 30)), "hard": hard}
 
 
-def generate(out, bricks=("red", "green", "blue"), n_good=30, n_defect=10, cams=("front", "wrist"),
+def generate(out, bricks=("pink", "green", "blue"), n_good=30, n_defect=10, cams=("front", "wrist"),
              views=("wp2-1", "wp2-2"), seed=0, raw=True, session_size=25):
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
@@ -301,7 +302,7 @@ def generate(out, bricks=("red", "green", "blue"), n_good=30, n_defect=10, cams=
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", required=True, help="the training_images/ dir to create (appends to meta.jsonl if it exists)")
-    ap.add_argument("--bricks", default="red,green,blue")
+    ap.add_argument("--bricks", default="pink,green,blue")
     ap.add_argument("--good", type=int, default=30, help="good episodes per brick")
     ap.add_argument("--defect", type=int, default=10, help="defect episodes (bricks with one cross) per brick")
     ap.add_argument("--cams", default="front,wrist")

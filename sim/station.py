@@ -36,9 +36,10 @@ class Brick:
     shape: str = "brick"  # "brick" (box + studs) or "ridge" (tent-shaped roof, no studs)
 
 
-# The real set (user, 2026-11-14): red 2x4 ridge roof ("triangle"), green 2x3 brick, blue 2x2 brick.
+# The real set (user, 2026-11-14): pink/salmon 2x2 brick, green 2x3 brick, blue 2x2 brick.
+# (The red 2x4 ridge roof "triangle" was swapped for the pink 2x2 that afternoon; shape="ridge" is kept for it.)
 BRICKS = (
-    Brick("red", 4, 2, (0.78, 0.06, 0.06), 0.014, "ridge"),
+    Brick("pink", 2, 2, (0.91, 0.53, 0.49), 0.006),
     Brick("green", 3, 2, (0.45, 0.78, 0.18), 0.009),
     Brick("blue", 2, 2, (0.05, 0.42, 0.85), 0.006),
 )

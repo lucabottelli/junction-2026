@@ -119,7 +119,8 @@ PLATES = {"input": ((0.21, 0.04), 0.08, (40, 120, 235)),  # centre, radius, BGR 
           "defect": ((0.05, 0.20), 0.065, (70, 70, 175))}
 PLATE_Z = 0.008
 TAPE = ((0.15, -0.12), 0.028)                            # tape spot centre, half side
-BRICK_COLORS = {"red": (40, 45, 200), "green": (60, 150, 60), "yellow": (40, 190, 225), "blue": (170, 90, 30)}
+REAL_SET = ("pink", "green", "blue")   # the station's blocks (2026-11-14: pink 2x2 replaced the red ridge roof)
+BRICK_COLORS = {"pink": (125, 135, 232), "red": (40, 45, 200), "green": (60, 150, 60), "yellow": (40, 190, 225), "blue": (170, 90, 30)}
 SIZES = {"2x2": (0.0318, 0.0318, 0.024), "2x4": (0.0636, 0.0318, 0.024), "2x3": (0.0477, 0.0318, 0.024)}
 AXES = {"+x": (0, 1), "-x": (0, -1), "+y": (1, 1), "-y": (1, -1), "+z": (2, 1), "-z": (2, -1)}
 INK = (18, 18, 22)
@@ -201,7 +202,7 @@ class World:
         rng = np.random.default_rng(self.n_spawn)
         c, r, _ = PLATES["input"]; a, rr = rng.uniform(0, 2 * math.pi), rng.uniform(0, 0.35 * r)
         b = Brick(defect=spec.get("defect"), size=spec.get("size", "2x2"),
-                  color=spec.get("color", list(BRICK_COLORS)[(self.n_spawn - 1) % 3]),
+                  color=spec.get("color", REAL_SET[(self.n_spawn - 1) % 3]),
                   pos=(c[0] + rr * math.cos(a), c[1] + rr * math.sin(a), 0), yaw=float(rng.uniform(-0.6, 0.6)))
         self.bricks = [x for x in self.bricks if x.state in ("good", "defect")][-10:] + [b]; self.active = b
         self.log(f"brick {b.id} ({b.color_name} {b.size_name}, defect {b.defect or 'none'}) on the {where} plate")

@@ -33,7 +33,7 @@ function rangePct(el){el.style.setProperty('--pct',((el.value-el.min)/(el.max-el
 const PILL={idle:['Ready',''],home:['Start pose','warn'],match:['Match leader','orange'],pick:['REC · Pick','rec'],carry:['REC · Carry to WP1','rec'],
  capture:['Photos at WP2','teal'],regrasp:['Re-grip','teal'],reset_auto:['Putting back','info'],reset:['Reset the scene','orange'],done:['Done','ok'],stopped:['Stopped','err'],error:['Error','err']};
 const JN={shoulder_pan:'Shoulder pan',shoulder_lift:'Shoulder lift',elbow_flex:'Elbow flex',wrist_flex:'Wrist flex',wrist_roll:'Wrist roll',gripper:'Gripper'};
-const COLORS={red:'#C8402F',blue:'#3D63A8',yellow:'#E3B83B',green:'#4F8A57',orange:'#D9773A',white:'#E7E3DA',black:'#24221F',purple:'#7D5BA6',pink:'#D07A9A',grey:'#9A958C',gray:'#9A958C'};
+const COLORS={red:'#C8402F',blue:'#3D63A8',yellow:'#E3B83B',green:'#4F8A57',orange:'#D9773A',white:'#E7E3DA',black:'#24221F',purple:'#7D5BA6',pink:'#E8877C',salmon:'#E8877C',grey:'#9A958C',gray:'#9A958C'};
 const blockOf=s=>String(s||'').split('_').slice(2).join('_');
 const swatch=b=>`<span class=sw style="background:${COLORS[(b||'').toLowerCase()]||'var(--sunk)'}"></span>`;
 const taught=n=>!!A&&((A.all[n]||{}).waypoints||[]).length>0;

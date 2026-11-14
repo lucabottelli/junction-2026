@@ -719,7 +719,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:260px;overflow:auto;backgroun
 .bar{height:10px;background:#2a3038;border-radius:5px;flex:1;min-width:80px}.bar i{display:block;height:10px;border-radius:5px}
 </style></head><body>
 <div class=row><button id=stop onclick="p('/collect/stop')">■ STOP (Space)</button>
-<span class=small>brick</span><input id=brick placeholder="e.g. red" style="width:100px">
+<span class=small>brick</span><input id=brick placeholder="e.g. pink" style="width:100px">
 <select id=label title="label for the inspection images (the pick episodes are useful either way)"><option value=good>good brick</option><option value=defect>defect brick</option></select>
 <span class=small>episodes</span><input id=n type=number value=20 min=1 style="width:70px">
 <button class="g big" onclick="p('/collect/start?n='+$('n').value+'&brick='+encodeURIComponent($('brick').value.trim())+'&label='+$('label').value)">▶ START</button>

@@ -3,7 +3,7 @@
  <header class=ph>
   <div class=eyebrow><b>Next</b> · Later <span class="badge line">Not built yet</span></div>
   <h1>Pick a <em>specific</em> block among several</h1>
-  <p class=lead>The first ACT model learns to pick whatever block is on the plate. The next step is choosing: “pick up the red one”, with the other blocks lying around as distractors.
+  <p class=lead>The first ACT model learns to pick whatever block is on the plate. The next step is choosing: “pick up the pink one”, with the other blocks lying around as distractors.
    ACT is already a vision policy (top + wrist images and joints in, actions out). What it needs next to it is something that decides <i>which</i> block and checks the right one ended up in the gripper.</p>
  </header>
  <div class=later-grid>
@@ -11,8 +11,8 @@
    <h2>How it will work</h2>
    <ol class=steps-list>
     <li><span><b>Block finder on the top camera.</b> A colour segmentation, or a small detector if colour isn't enough, finds every block on the orange plate and returns the target's position.</span></li>
-    <li><span><b>Option A: one ACT per block.</b> Export one dataset per block (the export can already select “red only”) and let the finder choose which model runs.</span></li>
-    <li><span><b>Option B: one language-conditioned policy.</b> SmolVLA trained on the same data, prompted with “pick up the red brick”. Every episode already stores that task text per frame.</span></li>
+    <li><span><b>Option A: one ACT per block.</b> Export one dataset per block (the export can already select “pink only”) and let the finder choose which model runs.</span></li>
+    <li><span><b>Option B: one language-conditioned policy.</b> SmolVLA trained on the same data, prompted with “pick up the pink brick”. Every episode already stores that task text per frame.</span></li>
     <li><span><b>Check the grasp.</b> After the hand-off the finder confirms the right block is in the gripper before the carry continues.</span></li>
    </ol>
    <h2>Why the data already fits</h2>

@@ -432,7 +432,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - The sim task is **phase 1 only:** pick a brick lying anywhere on the orange plate → WP1, the same episode as the real data.
     - **Stack:** `physicalai-mujoco-plugin` 0.5.0 (added to Studio's backend with `uv add`; mujoco 3.17, nothing downgraded). It provides the SO-101 twin (same joint names) and the composer. Our own scene sits on top of it, plus the plugin's `ArmIK` (damped least-squares, fingers down, jaw yaw).
     - **Files:**
-      - `station.py`: scene (table, 3 plates as dishes with rims, the real bricks (user-confirmed 04:55): **red 2×4 ridge roof** (tent-shaped prism, no studs), **green 2×3**, **blue 2×2**, top camera, wrist camera) and the units mapping.
+      - `station.py`: scene (table, 3 plates as dishes with rims, the real bricks (user-confirmed 04:55; **red 2×4 ridge roof swapped for a pink/salmon 2×2 on 2026-11-14 afternoon**, see decision 29): **pink 2×2**, **green 2×3**, **blue 2×2**, top camera, wrist camera) and the units mapping.
       - `calib.py` + `overlay.py`: fit to the real station; they write `calibration.json` and `calib/overlay_*.jpg`.
       - `expert.py`: scripted pick → WP1.
       - `generate.py`: randomized episodes in the **same raw format** as `episodes/`, written to `episodes_sim/`.
@@ -539,6 +539,12 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - Lowered slowly (0.3 × speed).
       - Each sub-step 1/4–4/4 is shown in the status line and the page.
       - The robot does not re-grip by itself: only human picks are training data, so the robot's job is to vary the start pose.
+29. **The block set changes: a pink/salmon 2×2 replaces the red 2×4 ridge roof ("triangle")** (2026-11-14 afternoon, the user's decision). Set now: **pink 2×2, green 2×3, blue 2×2**.
+    - **Recorded so far (verified on disk):** blue `20261114_131414_blue` 30/30 and green `20261114_142128_green` 30/30. Every episode loads, has all 3 cameras, and has one frame per camera per step at 30 Hz. No red episodes had been recorded, so nothing is lost.
+      - Blue ep0001 is 71 s long (pick 66 s, the manual-G hand-off before decision 28), against a median of about 23 s. It's a candidate to leave out of training.
+    - **Name it `pink`** when recording (block field on `/record`). The UI swatch is salmon (`#E8877C`; `salmon` works as an alias).
+    - **Changed:** the sim brick set (`sim/station.py`: pink 2×2, 6 g; the ridge-roof shape code stays), the mock station (spawns pink, green, blue), `synth_data.py` defaults (pink, green, blue; `red` kept only for the tests), and the "e.g." hints.
+    - **Note for the pick policy:** pink and blue are now the same shape and size and differ only in colour. One ACT policy should pick both the same way, and choosing between them ("pick up the pink one") becomes purely a colour problem.
 
 ---
 

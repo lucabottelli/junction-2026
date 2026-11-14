@@ -9,7 +9,7 @@ the hardware, the plan and the next steps.
 ## Layout
 | Path | What |
 |---|---|
-| `anomaly_capture/` | The control tool. Control site at `http://127.0.0.1:7870/`: one page per step (connect, waypoints, crop, record, episodes, train, anomaly) plus the future phases. Front end in `anomaly_capture/web/` (see `web/DESIGN.md`) |
+| `anomaly_capture/` | The control tool. Control site at `http://127.0.0.1:7870/`: one page per step (connect, waypoints, crop, record, episodes, train, anomaly, inspect & sort) plus the future phases. Front end in `anomaly_capture/web/` (see `web/DESIGN.md`) |
 | `anomaly_capture/capture.py` | Server + cameras (2× RealSense D415 + USB wrist cam), locked exposure/white balance |
 | `anomaly_capture/arm.py` | Follower/leader control, teach & replay waypoints, safety (STOP, rate limits, blocked detection) |
 | `anomaly_capture/collect.py` | Phase 1 (teleop pick + auto carry to WP1, recorded for ACT) and phase 2 (WP2 front-camera images) |

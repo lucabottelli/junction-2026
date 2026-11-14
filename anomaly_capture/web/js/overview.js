@@ -8,7 +8,7 @@ function render(){
  if(nx&&A&&C){const j=J[nx.slug]||{},later=nx.group=='later',rec=j.st=='rec';
   setH('ov-next',`<a class="nextup${rec?' rec':''}" href="${nx.path}">
    <span class=n>${later?ico(nx.icon||'route'):nx.step}</span>
-   <div><div class=k>${rec?'Recording now':later?'All seven steps done · next phase':'Continue where you left off'}</div>
+   <div><div class=k>${rec?'Recording now':later?'All eight steps done · next phase':'Continue where you left off'}</div>
     <div class=t>${esc(nx.title)}</div><div class=s>${esc(nx.summary)}</div>
     ${j.note?`<div class=note>${statusBadge(j.st)}<span>${esc(j.note)}</span></div>`:''}</div>
    <span class="btn primary lg">${rec?'Open the cockpit':'Continue'} <svg class="i arrow"><use href="#i-go"/></svg></span></a>`)}

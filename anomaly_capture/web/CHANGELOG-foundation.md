@@ -8,3 +8,4 @@ Changes to shared classes, tokens or the core API after `.split_done` (newest la
 - 04:36 `.seg button` no longer wraps; `.seg.full button` padding 0 8px.
 - 04:40 DESIGN.md: URLs/restarts section, rule 8 (global class names), later-page template.
 - 04:42 foundation done. /later/* and /stills need ONE server restart to load directly (arm was connected, so no restart was done); until then use in-app navigation or /#/later/sort.
+- 04:51 main session: merged PR #1 (inspect + sort). core: SO global + sort(SO) hook, /sort/stop in STOP, C/D/U + G/N sort keys, sort state in top bar, journey().sort. Step 8 /sort added (08-sort.*); later pages decide/sort/faces removed (built now). Steps are 'of 8'.

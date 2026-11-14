@@ -1,0 +1,192 @@
+<section class=page id=p-sort data-path="/sort" data-title="Inspect &amp; sort" data-nav="Inspect &amp; sort" data-group=steps data-step=8
+ data-summary="The robot shows the held object to the front camera, checks its whole surface and puts it on the good or the defect plate.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 8</b> of 8</div>
+  <h1>Inspect <em>&amp;</em> sort</h1>
+  <p class="lead so-lead">The robot shows the held object to the front camera. <b>Any photo with a defect sends it straight to the defect plate.</b>
+   It goes to the good plate only after its <b>whole surface was seen clean</b>: first what is visible as picked, then it is set down on the tape spot,
+   photographed from above and gripped again turned 90°, so what was under the fingers shows. Any shape works. Anything uncertain is never called good.</p>
+ </header>
+
+ <div id=so-call></div>
+
+ <div class=kpis id=so-kpis></div>
+
+ <div class="todo so-todo"><div class=todo-h>What to do</div><ol>
+  <li><span><b>Teach the two plates.</b> Holding an object with the leader, save the release pose about 3 cm above each plate.</span></li>
+  <li><span><b>Tick what each WP2 photo pose shows</b> until the surface coverage reads 100 %. Front, back and down are the minimum, plus the tape spot.</span></li>
+  <li><span><b>Choose how to pick and judge.</b> Hand-feed with the manual judge tests every motion before a model exists. Then press <b>Start</b>.</span></li>
+  <li><span><b>Follow the cockpit.</b> Hand-feed: put the object between the open fingers and press <b>G</b>. Manual judge: answer each photo with <b>C</b>, <b>D</b> or <b>U</b>.</span></li>
+  <li><span><b>After training a model,</b> calibrate the thresholds below, then switch the judge to <b>Model</b>.</span></li>
+ </ol></div>
+
+ <div class=so-body>
+
+ <!-- 1 · plates -->
+ <section class="sec so-s-teach">
+  <div class=sec-h><h2><span class=so-n>1</span>Teach the two plates</h2><p>hold an object about 3 cm above each plate; the robot opens the gripper there</p><span class=r id=so-plates-n></span></div>
+  <div id=so-mirror></div>
+  <div class=g2 id=so-plates></div>
+
+  <div class="card so-rel">
+   <div class=ch><h3><svg class=i><use href="#i-cam"/></svg>Top photo of the released object</h3><span class=r id=so-relstate></span></div>
+   <p class=sub>While the object lies on the tape spot with the gripper open above it, this camera photographs its top: the side the gripper hides while holding.
+    Set the crop so the object fills the picture. The training photos use the same crop, so set it <b>before</b> collecting.</p>
+   <div class=so-rel-grid>
+    <div class=so-rel-ctl>
+     <label class=switch><input type=checkbox id=so-rel><span class=tr></span><span><b>Use the top photo</b><span class=d>Needs the tape spot taught and the camera live</span></span></label>
+     <div class=field><label>Camera</label><div class="seg sm" id=so-relcam><button data-v=wrist onclick="soCfg('release_cam','wrist')">Wrist</button><button data-v=top onclick="soCfg('release_cam','top')">Top</button></div></div>
+     <div class=field><label>Crop, % of the frame</label>
+      <div class=so-crop>
+       <span class=so-crop-k>x</span><input id=so-x0 type=number min=0 max=100 aria-label="x from"><span class=so-crop-d>to</span><input id=so-x1 type=number min=0 max=100 aria-label="x to">
+       <span class=so-crop-k>y</span><input id=so-y0 type=number min=0 max=100 aria-label="y from"><span class=so-crop-d>to</span><input id=so-y1 type=number min=0 max=100 aria-label="y to">
+      </div>
+      <div class=hint>0–100 from the left / top edge of the selected camera's frame.</div></div>
+     <button class="btn sm" id=so-roibtn onclick="soRoi()"><svg class=i><use href="#i-crop"/></svg>Set crop</button>
+    </div>
+    <figure class=fig><div class="feed r43 so-relfeed"><img id=so-relimg data-ms=700 alt=""><div class=nofeed id=so-relno>No signal</div>
+     <div class=tl><span class=ov id=so-relov>Top photo crop</span></div></div>
+     <figcaption><b>Live</b><span>exactly what the top-photo model gets</span></figcaption></figure>
+   </div>
+  </div>
+ </section>
+
+ <!-- 2 · coverage -->
+ <section class="sec so-s-cov">
+  <div class=sec-h><h2><span class=so-n>2</span>Surface coverage</h2><p>what each WP2 photo pose shows, seen from the camera relative to the gripper</p><span class=r id=so-cov-n></span></div>
+  <div class=split>
+   <div class=stack>
+    <div class="card so-faces">
+     <div class=ch><h3>What each WP2 pose shows</h3><span class=r><a class="btn sm ghost" href="/waypoints">WP2 poses<svg class="i arrow"><use href="#i-go"/></svg></a></span></div>
+     <table class=so-facetab><thead><tr><th>WP2 pose</th><th>Front</th><th>Back</th><th>Up</th><th>Down</th></tr></thead><tbody id=so-facetab></tbody></table>
+     <dl class=so-legend>
+      <div><dt>Front</dt><dd>the free side facing the camera</dd></div>
+      <div><dt>Back</dt><dd>the opposite free side (wrist turned 180°)</dd></div>
+      <div><dt>Down</dt><dd>the side that lay on the table (gripper pointing at the camera)</dd></div>
+      <div><dt>Up</dt><dd>the palm side, usually hidden by the gripper: use the top photo instead</dd></div>
+     </dl>
+     <p class="small muted so-two">Two ticks = a diagonal view. Add WP2 photo poses on <a href="/waypoints">Waypoints</a> until the surface is 100 % covered.</p>
+    </div>
+   </div>
+   <aside class=stack>
+    <div class="card so-covcard">
+     <div class=ch><h3>Coverage of a clean object</h3></div>
+     <div class=so-chips id=so-cov></div>
+     <div id=so-covmsg></div>
+     <div class=so-k>Planned sequence</div>
+     <ol class=so-plan id=so-plan></ol>
+    </div>
+    <div class="card flat so-geo">
+     <div class=ch><h3>Geometry</h3></div>
+     <div class=field><label for=so-vd>A photo covers surfaces tilted up to</label><div class=so-unit><input id=so-vd type=number min=30 max=80><span>° away</span></div></div>
+     <div class=fields2>
+      <div class=field><label for=so-fd>Fingers hide ±</label><div class=so-unit><input id=so-fd type=number min=10 max=60><span>°</span></div></div>
+      <div class=field><label for=so-mr>Max re-grips</label><input id=so-mr type=number min=0 max=4></div>
+     </div>
+    </div>
+   </aside>
+  </div>
+ </section>
+
+ <!-- 3 · run -->
+ <section class="sec so-s-run">
+  <div class=sec-h><h2><span class=so-n>3</span>Run</h2><p>how the object is picked and judged</p></div>
+  <div class=split>
+   <div class="card so-runcard">
+    <div class=field><label>Pick</label><div class="seg full" id=so-pick>
+     <button data-v=handfeed onclick="soCfg('pick','handfeed')">Hand-feed</button><button data-v=teleop onclick="soCfg('pick','teleop')">Teleop with the leader</button><button data-v=act disabled title="Phase 6, later">ACT policy · later</button></div>
+     <div class=hint id=so-pickhint></div></div>
+    <div class=field><label>Defect judge</label><div class="seg full" id=so-judge>
+     <button data-v=manual onclick="soCfg('judge','manual')">Manual · you answer C / D / U</button><button data-v=model onclick="soCfg('judge','model')">Anomalib model · OpenVINO</button></div></div>
+    <div class=so-model id=so-model>
+     <div class=fields2>
+      <div class=field><label for=so-brick>Brick model</label><select id=so-brick></select><div class=hint><code>models/&lt;cam&gt;/&lt;brick&gt;/…/model.xml</code></div></div>
+      <div class=field><label for=so-dev>Device</label><select id=so-dev><option>GPU</option><option>CPU</option><option>NPU</option><option>AUTO</option></select></div>
+     </div>
+     <div class=so-casc>
+      <label class=switch><input type=checkbox id=so-casc><span class=tr></span><span><b>Cascade: fast model first</b><span class=d><code>&lt;brick&gt;_efficientad</code> answers first; only photos it is unsure about go to the main model. Used only once it is calibrated.</span></span></label>
+      <div class="field so-fdev"><label for=so-fdev>Fast model on</label><select id=so-fdev><option>NPU</option><option>GPU</option><option>CPU</option></select></div>
+     </div>
+     <div class=so-thr>
+      <div class=field><label for=so-tl>Clean ≤</label><input id=so-tl type=number step=0.01 min=0 max=1></div>
+      <div class=field><label for=so-th>Defect ≥</label><input id=so-th type=number step=0.01 min=0 max=1></div>
+      <div class=field><label for=so-rt>Retakes</label><input id=so-rt type=number min=0 max=5></div>
+     </div>
+     <div class="hint so-thrhint">A model folder's <code>thresholds.json</code> (from calibration) overrides these. In between → retake; still in between → defect plate (fail-safe).</div>
+    </div>
+    <label class=switch><input type=checkbox id=so-inc><span class=tr></span><span><b>Allow incomplete coverage</b><span class=d>Testing only: such objects always go to the defect plate.</span></span></label>
+    <div class=so-go>
+     <div class=field><label for=so-nobj>Objects</label><input id=so-nobj type=number value=1 min=1></div>
+     <button class="btn primary lg" id=so-start onclick="soStart()"><svg class=i><use href="#i-play"/></svg>Start inspect &amp; sort</button>
+    </div>
+   </div>
+   <aside>
+    <div class="card so-pre"><div class=ch><h3>Before you start</h3><span class=r id=so-presum></span></div><div id=so-pre></div></div>
+   </aside>
+  </div>
+ </section>
+
+ <!-- 4 · live cockpit -->
+ <section class="sec so-s-live" id=so-live>
+  <div class=sec-h><h2><span class=so-n>4</span>Live</h2><p>the object being inspected now</p><span class=r id=so-live-r></span></div>
+  <div class=so-now id=so-now aria-live=polite>
+   <div class=so-eye><span class=so-state id=so-state><span class=dot></span><span id=so-statetxt>Loading</span></span><span class=so-count id=so-count></span></div>
+   <div class=so-verd><div class=so-vk id=so-vk>Verdict</div><h2 class=so-head id=so-head>–</h2></div>
+   <div class=so-who>
+    <div><div class=k>You</div><div class=t id=so-you></div></div>
+    <div><div class=k>Robot</div><div class=t id=so-robot></div></div>
+   </div>
+   <div class=so-livecov><div class=so-k>Surface seen clean <span id=so-seen></span></div><div class=so-chips id=so-faces></div></div>
+   <div class=so-msg id=so-msg></div>
+  </div>
+
+  <div class=so-judge id=so-judgebox hidden>
+   <figure class=fig><div class="feed r43 so-jfeed"><img id=so-jimg alt=""><div class=nofeed id=so-jno>Waiting for the photo</div>
+    <div class=tl><span class=ov>Judge this photo</span></div></div>
+    <figcaption><b id=so-jcap></b></figcaption></figure>
+   <div class=so-jk>
+    <div class=so-jq>Clean, defect or unsure?</div>
+    <button class="so-key so-kc" id=so-kc onclick="soJudge('clean')"><kbd>C</kbd><span><b>Clean</b><em>No defect on this photo</em></span></button>
+    <button class="so-key so-kd" id=so-kd onclick="soJudge('defect')"><kbd>D</kbd><span><b>Defect</b><em>Straight to the defect plate</em></span></button>
+    <button class="so-key" id=so-ku onclick="soJudge('unsure')"><kbd>U</kbd><span><b>Unsure</b><em>Counts as not clean: defect plate (fail-safe)</em></span></button>
+   </div>
+  </div>
+
+  <div class=so-keys>
+   <button class=so-key id=so-kg onclick="soFlag('grasped')"><kbd>G</kbd><span><b>Object in the fingers: close</b><em>Hand-feed, or the robot missed the grasp</em></span></button>
+   <button class=so-key id=so-kn onclick="soFlag('next')"><kbd>N</kbd><span><b>Next</b><em>After putting a dropped object back</em></span></button>
+   <button class="btn stop lg" id=so-stop onclick="soStop()" hidden><svg class=i><use href="#i-stop"/></svg>Stop<kbd>Space</kbd></button>
+  </div>
+
+  <div class=so-steps id=so-steps></div>
+ </section>
+
+ <!-- 5 · results + calibration -->
+ <section class="sec so-s-res">
+  <div class=sec-h><h2><span class=so-n>5</span>Results</h2><p id=so-sess>this session</p></div>
+  <div class=split>
+   <div class=stack>
+    <div class=kpis id=so-tot></div>
+    <div id=so-hist></div>
+    <div class=so-photos id=so-photos></div>
+   </div>
+   <aside>
+    <div class="card so-cal">
+     <div class=ch><h3><svg class=i><use href="#i-gauge"/></svg>Calibrate the thresholds</h3><span class=r id=so-calst></span></div>
+     <p class=sub>After training a model. Scores the saved <code>*_crop.png</code> of the selected brick through the same path as the live run.
+      Good photos held out from training set the clean level; for each defect brick its highest-scoring photo counts (the cross is on one face only).
+      Writes <code>thresholds.json</code> next to the model.</p>
+     <div class=so-calbtns>
+      <button class="btn sm" id=so-cal1 onclick="soCal('front',false)">Front model</button>
+      <button class="btn sm" id=so-cal2 onclick="soCal('',false,true)">Top-photo model</button>
+      <button class="btn sm" id=so-cal3 onclick="soCal('front',true)">Fast front model</button>
+     </div>
+     <div id=so-calsum></div>
+     <pre class=so-calout id=so-calout>–</pre>
+    </div>
+   </aside>
+  </div>
+ </section>
+
+ </div>
+</section>

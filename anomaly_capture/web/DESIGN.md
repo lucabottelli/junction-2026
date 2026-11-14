@@ -318,10 +318,19 @@ for the full top frame), `/recent/<i>`.
 | 03-crop | `/crop` | page agent |
 | 04-record | `/record` | page agent |
 | 05-episodes, 06-train, 07-anomaly | `/episodes` `/train` `/anomaly` | page agent |
-| 11..16-later-* | `/later/target` `/later/decide` `/later/sort` `/later/faces` `/later/autonomous` `/later/measure` | foundation |
+| 08-sort | `/sort` (step 8: inspect + sort, phases 3–5, from PR #1 / sorter.py) | sort agent |
+| 11, 15, 16-later-* | `/later/target` `/later/autonomous` `/later/measure` (phases 3–5 are built now: see `/sort`) | foundation |
 | 20-stills | `/stills` | foundation |
 
 The ported pages (02–07) are a mechanical port of the old `/arm` page: their markup, ids and logic are the
 old ones with the new header skeleton; redesign them freely within the rules above. Old classes that
 now live in your `css/<slug>.css` (`.wp .pose .grp`, `.crop .roi`, `.steps .stp .hero .ring .keys .key .gaps .bar .stats`,
 `.sess .blk .recent`, `.term`) are yours to rename or restyle.
+
+## Inspect & sort (added after PR #1)
+- Core polls `GET /sort/status` with the other 350 ms requests and keeps it in the global `SO` (null while the sorter
+  router isn't loaded: a 404 backs off to one try per 5 s). Pages get it through the hook `sort(SO)`.
+- `stopAll()` also POSTs `/sort/stop`. Keys: while `SO.judge` → C / D / U = `/sort/judge/clean|defect|unsure`;
+  while `SO.active` (and no collection run) → G / N = `/sort/flag/grasped|next`.
+- The top bar shows the sorter's state while it runs (or is in help / stopped / error), otherwise the collector's.
+- `journey().sort` is the step-8 status (plates taught / objects sorted).

@@ -7,8 +7,9 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const setH=(el,h)=>{if(typeof el=='string')el=$(el);if(!el)return;if(el.dataset.h!==h){el.dataset.h=h;el.innerHTML=h}};   // innerHTML only when it changed
 const ico=n=>`<svg class=i><use href="#i-${n}"/></svg>`;
 const LS={get(k,d){try{const x=localStorage.getItem('bs.'+k);return x==null?d:x}catch(e){return d}},set(k,x){try{localStorage.setItem('bs.'+k,x)}catch(e){}}};
-const PAGE={};                 // page registry: PAGE.<slug> = {init, show, hide, arm(A), col(C), slow(S), counts(K)}
+const PAGE={};                 // page registry: PAGE.<slug> = {init, show, hide, arm(A), col(C), sort(SO), slow(S), counts(K)}
 let A=null,C=null,S=null,K=null;   // latest /arm/status, /collect/status, /status, /collect/counts (null until first answer)
+let SO=null,soNext=0;          // latest /sort/status (inspect + sort, sorter.py); null while the sorter isn't loaded (404) or unreachable
 let PAGES=[],CUR=null;         // page records built from <section class=page>, current page
 let q=Promise.resolve(),lastArmMsg=null,lastColMsg=null,busyRefresh=false;
 
@@ -17,7 +18,7 @@ function expose(o){for(const k in o){if(k in window&&window[k]!==o[k])console.wa
 
 /* ---------- requests, toasts, confirm ---------- */
 function p(u){q=q.then(()=>fetch(u,{method:'POST'}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(()=>refresh()).catch(e=>toast('Request failed: '+e.message,'err')));return q}
-function stopAll(){fetch('/collect/stop',{method:'POST'});fetch('/arm/stop',{method:'POST'}).then(refresh)}
+function stopAll(){fetch('/sort/stop',{method:'POST'}).catch(()=>{});fetch('/collect/stop',{method:'POST'});fetch('/arm/stop',{method:'POST'}).then(refresh)}
 function flag(f){p('/collect/flag/'+f)}
 function toast(msg,kind){const t=document.createElement('div');t.className='toast '+(kind||'');t.innerHTML=`<span class="dot ${kind=='err'?'err':kind=='ok'?'ok':''}"></span><span>${esc(msg)}</span>`;
  $('toasts').appendChild(t);while($('toasts').children.length>4)$('toasts').firstChild.remove();
@@ -69,6 +70,9 @@ function journey(){
  const ks=K?Object.keys(K):[],g=ks.reduce((a,b)=>a+K[b].good,0),d=ks.reduce((a,b)=>a+K[b].defect,0);
  J.anomaly=mk(ks.length&&ks.every(b=>K[b].good>=60&&K[b].defect>=10)?'done':g+d?'part':'todo',
   g+d?`${g} good · ${d} defect images`:(C&&C.cfg&&C.cfg.phase2)?'No photos yet':'Optional · WP2 photos are switched off',g+d||'');
+ const so=SO,tot=(so&&so.totals)||{},nd=(tot.good||0)+(tot.defect||0);
+ J.sort=!so?mk('todo','Sorter not loaded: restart the server'):so.active?mk('run',`Inspecting object ${(so.cur&&so.cur.cycle)||''}`.trim(),'')
+  :mk(nd?'done':(so.bins&&so.bins.good&&so.bins.defect)?'part':'todo',nd?`${tot.good||0} good · ${tot.defect||0} defect sorted`:(so.bins&&so.bins.good&&so.bins.defect)?'Plates taught · ready to run':'Teach the two plates first',nd||'');
  PAGES.forEach(pg=>{if(pg.group=='later')J[pg.slug]=mk('later',pg.phase||'Later')});
  return J}
 /* first step that isn't done (a running recording always wins) */
@@ -106,7 +110,7 @@ document.addEventListener('click',e=>{const a=e.target.closest('a[href]');if(!a|
  const u=new URL(a.href,location.href);if(u.origin!=location.origin||!pageFor(u.pathname))return;e.preventDefault();go(u.pathname)});
 window.addEventListener('popstate',()=>{document.body.classList.add('navd');route()});
 /* old /arm#hash links -> new paths */
-const OLD_VIEWS={setup:'/connect',teach:'/waypoints',views:'/crop',collect:'/record',episodes:'/episodes',export:'/train',anomaly:'/anomaly',roadmap:'/later/target',tools:'/stills'};
+const OLD_VIEWS={setup:'/connect',teach:'/waypoints',views:'/crop',collect:'/record',episodes:'/episodes',export:'/train',anomaly:'/anomaly',sort:'/sort',p3:'/sort',p4:'/sort',p5:'/sort',roadmap:'/later/target',tools:'/stills'};
 function oldHash(){const h=location.hash.slice(1),t=OLD_VIEWS[h]||(h[0]=='/'&&pageFor(h)?h:null);if(t)history.replaceState(null,'',t)}   // also /#/later/sort deep links (page added since the server started)
 
 /* ---------- registry dispatch: one broken page never breaks the others ---------- */
@@ -121,7 +125,17 @@ function live(img){if(img.dataset.live)return;img.dataset.live='1';const ms=()=>
  img.onload=()=>{img.dataset.ok='1';setTimeout(tick,ms())};img.onerror=()=>{img.dataset.ok='';setTimeout(tick,1500)};tick()}
 
 /* ---------- top bar ---------- */
-function topbar(){const c=C,s=A;if(!c)return;const st=c.state,busy=c.active||!['idle','done','stopped','error'].includes(st);
+const SORTPILL={handfeed:['Hand-feed · press G','orange'],home:['Start pose','warn'],match:['Match leader','orange'],pick:['Pick','rec'],carry:['Carry to WP1','info'],
+ inspect:['Inspecting','teal'],judge:['Judge · C / D / U','warn'],regrasp:['Re-grip','teal'],sort_good:['→ Good plate','ok'],sort_defect:['→ Defect plate','err'],
+ help:['Put it back · N','orange'],done:['Sort done','ok'],stopped:['Stopped','err'],error:['Error','err']};
+function topbar(){const c=C,s=A;if(!c)return;
+ if(SO&&!c.active&&(SO.active||['help','stopped','error'].includes(SO.state))){const pl=SORTPILL[SO.state]||[SO.state,''],pc='pill '+pl[1];
+  if($('pill').className!=pc)$('pill').className=pc;$('pilltxt').textContent=pl[0];
+  $('prog').textContent=SO.cur&&SO.cur.cycle?'object '+SO.cur.cycle:'';$('statemsg').textContent=SO.msg||'';$('statemsg').title=SO.msg||'';
+  if(s){const conn=s.connected,mtxt=!conn?'Not connected':s.running?'Moving':({mirror:'Mirroring',hold:'Holding',limp:'Limp',off:'Off'}[s.mode]||s.mode);
+   setH('armchip',`<span class="dot ${!conn?'err':s.running?'acc':s.mode=='limp'?'warn':'ok'}"></span><span>Arm · ${esc(mtxt)}</span>`)}
+  return}
+ const st=c.state,busy=c.active||!['idle','done','stopped','error'].includes(st);
  const armBusy=s&&s.running&&!c.active,pl=armBusy&&st=='idle'?['Arm moving','info']:(PILL[st]||[st,'']);
  const pc='pill '+pl[1];if($('pill').className!=pc)$('pill').className=pc;$('pilltxt').textContent=pl[0];
  $('prog').textContent=c.active?`${c.done} / ${c.target}`:'';
@@ -135,18 +149,23 @@ function camchip(){if(!S){setH('camchip','<span class="dot err"></span><span>Ser
 
 /* ---------- polling: 350 ms (arm + collect), 2 s (cameras + anomaly counts) ---------- */
 const getJ=u=>fetch(u).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()});
-function refresh(){busyRefresh=true;return Promise.all([getJ('/arm/status'),getJ('/collect/status')]).then(([a,c])=>{A=a;C=c;hook('arm',a);hook('col',c);topbar();sideStatus()})
+function getSort(){if(Date.now()<soNext)return Promise.resolve(SO);
+ return getJ('/sort/status').then(x=>{SO=x;return x}).catch(()=>{SO=null;soNext=Date.now()+5000;return null})}
+function refresh(){busyRefresh=true;return Promise.all([getJ('/arm/status'),getJ('/collect/status'),getSort()]).then(([a,c,so])=>{A=a;C=c;hook('arm',a);hook('col',c);hook('sort',so);topbar();sideStatus()})
  .catch(()=>{$('pill').className='pill err';$('pilltxt').textContent='Offline';$('prog').textContent='';$('statemsg').textContent='Can’t reach the capture server on :7870. Is it running? (anomaly_capture/restart.sh)'})
  .finally(()=>{busyRefresh=false})}
 function slow(){getJ('/status').then(s=>{S=s;hook('slow',s)}).catch(()=>{S=null}).finally(()=>{camchip();sideStatus()});
  getJ('/collect/counts').then(o=>{K=o;hook('counts',o);sideStatus()}).catch(()=>{})}
 
-/* ---------- keyboard: Space / Esc = STOP anywhere; G X N K = collection flags ---------- */
+/* ---------- keyboard: Space / Esc = STOP anywhere; G X N K = collection flags; while sorting: G N, and C D U = manual judge ---------- */
 document.addEventListener('keydown',e=>{
  if(e.key==' '||e.key=='Escape'){e.preventDefault();if($('modal').classList.contains('on'))$('mno').click();stopAll();return}
  if(e.ctrlKey||e.metaKey||e.altKey)return;
  if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)&&!['checkbox','range'].includes(e.target.type))return;
- const m={g:'grasped',x:'discard',k:'skip',n:'next'}[e.key.toLowerCase()];if(m){flag(m);if(C&&C.active)toast({grasped:'G: grasp flagged, robot takes over',discard:'X: pick discarded',skip:'K: mirroring anyway',next:'N: next'}[m])}});
+ const kk=e.key.toLowerCase();
+ if(SO&&SO.judge&&['c','d','u'].includes(kk)){const j={c:'clean',d:'defect',u:'unsure'}[kk];p('/sort/judge/'+j);toast(kk.toUpperCase()+': '+j);return}
+ if(SO&&SO.active&&!(C&&C.active)&&['g','n'].includes(kk)){p('/sort/flag/'+(kk=='g'?'grasped':'next'));toast(kk=='g'?'G: object in the fingers, closing':'N: next');return}
+ const m={g:'grasped',x:'discard',k:'skip',n:'next'}[kk];if(m){flag(m);if(C&&C.active)toast({grasped:'G: grasp flagged, robot takes over',discard:'X: pick discarded',skip:'K: mirroring anyway',next:'N: next'}[m])}});
 
 /* ---------- boot (called by ui.py after every page script has loaded) ---------- */
 function boot(){

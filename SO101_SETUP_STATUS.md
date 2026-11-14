@@ -377,7 +377,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - **Option B:** one language-conditioned policy (SmolVLA, "pick up the red block") on the same data.
       - Shown as a "Next" card on `/arm`.
     - **Simulated:** 2 episodes; put-back went to the pick spot with a random roll, descended slowly and released; task stored per episode; `--bricks red` export filter works.
-20. **Inspect the whole surface of any shape, then sort: phases 3-5 are built** (2026-11-14 ≈04:30, the user's rule). Code: `anomaly_capture/sorter.py` + `coverage.py`, page section **8 "Inspect the whole surface + sort"** on `/arm`, API `/sort/*`.
+20. **Inspect the whole surface of any shape, then sort: phases 3-5 are built** (2026-11-14 ≈04:30, the user's rule). Code: `anomaly_capture/sorter.py` + `coverage.py`, page **step 8 "Inspect & sort" at `/sort`** (was section 8 on `/arm`; see Decision 22), API `/sort/*`.
     - **The rule:**
       - An object goes to the **good plate only after its whole surface was seen and judged clean**.
       - **The first photo that shows a defect sends it to the defect plate at once**, without checking the rest.
@@ -469,8 +469,8 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - Instrument Serif for titles and big numbers, Inter for body text. Both are self-hosted in `anomaly_capture/web/static/fonts/`, so no internet is needed.
     - **Pages:**
       - Overview: the journey at a glance plus "continue where you left off".
-      - `/` `/connect` `/waypoints` `/crop` `/record` `/episodes` `/train` `/anomaly`: steps 1–7, each with "What to do" and previous/next links.
-      - `/later/target|decide|sort|faces|autonomous|measure`: the future phases, one page each.
+      - `/` `/connect` `/waypoints` `/crop` `/record` `/episodes` `/train` `/anomaly` `/sort`: steps 1–8, each with "What to do" and previous/next links. Step 8 is the teammate's inspect + sort (Decision 20, PR #1), ported into the new design.
+      - `/later/target|autonomous|measure`: the remaining future phases, one page each (phases 3–5 are built now, so their "later" pages were removed).
       - `/stills`: the manual still photos.
       - `/arm` and `/collect` redirect, and old `#hash` links are mapped to the new paths. `/manual` (the old capture page) is unchanged.
     - **Code layout:**
@@ -479,7 +479,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - `ui.py` assembles everything from disk on every request, so editing a page needs only a browser reload. A server restart is needed only when a page path is added.
       - The contract is in `web/DESIGN.md`.
     - **Demo previews:** `/record?demo=<state>` and `?demo=1` on Episodes, Train and Anomaly render sample data and send nothing.
-    - **No API behaviour changed.** Built by 5 parallel agents (foundation + 4 page groups), which sent only GET requests and moved nothing. The buttons were not click-tested on the robot.
+    - **No API behaviour changed.** Built by 6 parallel agents (foundation + 5 page groups), which sent only GET requests and moved nothing. The buttons were not click-tested on the robot.
     - **Noticed while building:** the live **wrist** view shows the room and people at the top of the image. The ACT policy can therefore still see background movement through the wrist camera. Consider masking or cropping the top of the wrist image (in `prep.py`, so training and runtime use the same image).
 
 ---

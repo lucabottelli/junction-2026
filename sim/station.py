@@ -39,7 +39,7 @@ class Brick:
 # The real set (user, 2026-11-14): pink/salmon 2x2 brick, green 2x3 brick, blue 2x2 brick.
 # (The red 2x4 ridge roof "triangle" was swapped for the pink 2x2 that afternoon; shape="ridge" is kept for it.)
 BRICKS = (
-    Brick("pink", 2, 2, (0.91, 0.53, 0.49), 0.006),
+    Brick("pink", 2, 2, (0.78, 0.32, 0.29), 0.006),  # salmon; tuned so degraded renders match the top camera (real RGB ~180,85,94)
     Brick("green", 3, 2, (0.45, 0.78, 0.18), 0.009),
     Brick("blue", 2, 2, (0.05, 0.42, 0.85), 0.006),
 )

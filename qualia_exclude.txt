@@ -1,0 +1,7 @@
+# Real picks rejected after the Qualia checks on junction-real76-pick (2026-11-14, episode-rules run cafc966f).
+20261114_131414_blue/ep0022_134644   # Qualia: gripper flicker x3 (recommended)
+20261114_131414_blue/ep0044_141328   # Qualia: gripper flicker x4 (recommended)
+20261114_131414_blue/ep0045_141410   # Qualia: gripper flicker x3 (recommended) + correction
+20261114_150142_pink/ep0031_151808   # Qualia: gripper flicker x3 (recommended) + 2 corrections
+20261114_150142_pink/ep0042_152424   # Qualia: 2 corrections near the grasp
+20261114_150142_pink/ep0008_150611   # Qualia: joints 200 ms behind the command

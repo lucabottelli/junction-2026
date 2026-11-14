@@ -102,6 +102,7 @@ def load_episodes(args):
         if args.sessions and d.parent.name not in args.sessions: continue
         if args.bricks and m.get("brick") not in args.bricks: continue
         why = None
+        if name in args.exclude_set: rej.append((name, args.exclude_set[name])); continue
         if m.get("outcome") != "success": why = f"outcome {m.get('outcome')}"
         elif m.get("keep") is False: why = "unticked by you"
         elif (m.get("grasp_attempts") or 0) > args.max_attempts: why = f"{m['grasp_attempts']} grasp attempts (fumble)"
@@ -143,7 +144,14 @@ def main():
     ap.add_argument("--sim-episodes", default="", help="also export simulated episodes from this folder (sim/generate.py)")
     ap.add_argument("--sim-max", type=int, default=0, help="at most this many sim episodes (0 = all)")
     ap.add_argument("--real-repeat", type=int, default=1, help="write each real episode this many times (weights real vs sim)")
+    ap.add_argument("--exclude", default="", help="file of <session>/<episode> names to leave out, one per line, optional '# reason'"
+                    " (e.g. ~/junction26/qualia_exclude.txt from the Qualia checks)")
     args = ap.parse_args()
+    args.exclude_set = {}
+    if args.exclude:
+        for ln in Path(args.exclude).expanduser().read_text().splitlines():
+            nm, _, why = ln.partition("#")
+            if nm.strip(): args.exclude_set[nm.strip()] = f"excluded: {why.strip() or args.exclude}"
     EP = Path(args.episodes)
 
     eps, rej = load_episodes(args)
@@ -181,7 +189,9 @@ def main():
 
     pid, eid = studio_ids()
     bricks = sorted({m.get("brick") or "?" for _, m, *_ in plans})
-    task_of = lambda m: args.task or (m.get("task") if m.get("task") and m.get("brick") else "pick up the brick")
+    # early episodes saved the generic "pick up the brick"; name the brick when it is known
+    task_of = lambda m: args.task or (f"pick up the {m['brick']} brick" if m.get("brick") and m.get("task") in (None, "", "pick up the brick")
+                                      else m.get("task") or "pick up the brick")
     tasks = sorted({task_of(m) for _, m, *_ in plans})
     name = args.name or f"pick-{'-'.join(bricks)}-x{len(plans)}"
     body = json.dumps({"name": name, "default_task": tasks[0] if len(tasks) == 1 else "pick up the brick",

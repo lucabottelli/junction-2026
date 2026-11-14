@@ -89,11 +89,11 @@
 </body>
     <body name="brick_pink" pos="0.5096 0.1166 0.0096">
   <freejoint name="brick_pink:joint"/>
-  <geom name="brick_pink" type="box" size="0.0157 0.0157 0.0096" mass="0.006" rgba="0.720 0.350 0.390 1" friction="0.9 0.01 0.0002" solref="0.004 1"/>
-  <geom type="cylinder" size="0.0047 0.00225" pos="-0.0078 -0.0078 0.0118" mass="0.0003" rgba="0.720 0.350 0.390 1" friction="0.9 0.01 0.0002"/>
-  <geom type="cylinder" size="0.0047 0.00225" pos="-0.0078 0.0082 0.0118" mass="0.0003" rgba="0.720 0.350 0.390 1" friction="0.9 0.01 0.0002"/>
-  <geom type="cylinder" size="0.0047 0.00225" pos="0.0082 -0.0078 0.0118" mass="0.0003" rgba="0.720 0.350 0.390 1" friction="0.9 0.01 0.0002"/>
-  <geom type="cylinder" size="0.0047 0.00225" pos="0.0082 0.0082 0.0118" mass="0.0003" rgba="0.720 0.350 0.390 1" friction="0.9 0.01 0.0002"/>
+  <geom name="brick_pink" type="box" size="0.0157 0.0157 0.0096" mass="0.006" rgba="0.780 0.320 0.290 1" friction="0.9 0.01 0.0002" solref="0.004 1"/>
+  <geom type="cylinder" size="0.0047 0.00225" pos="-0.0078 -0.0078 0.0118" mass="0.0003" rgba="0.780 0.320 0.290 1" friction="0.9 0.01 0.0002"/>
+  <geom type="cylinder" size="0.0047 0.00225" pos="-0.0078 0.0082 0.0118" mass="0.0003" rgba="0.780 0.320 0.290 1" friction="0.9 0.01 0.0002"/>
+  <geom type="cylinder" size="0.0047 0.00225" pos="0.0082 -0.0078 0.0118" mass="0.0003" rgba="0.780 0.320 0.290 1" friction="0.9 0.01 0.0002"/>
+  <geom type="cylinder" size="0.0047 0.00225" pos="0.0082 0.0082 0.0118" mass="0.0003" rgba="0.780 0.320 0.290 1" friction="0.9 0.01 0.0002"/>
 </body>
 <body name="brick_green" pos="0.5796 0.1166 0.0096">
   <freejoint name="brick_green:joint"/>

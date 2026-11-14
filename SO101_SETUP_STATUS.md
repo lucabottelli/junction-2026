@@ -556,7 +556,45 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - **`gen3` (700 attempts, seed 2000000, `-j 8` to leave CPU for `capture.py`)** rebuilds all three bricks with pink in the scene. `export_act.py --sim-episodes ~/junction26/episodes_sim` picks it up as is.
     - **Pink recorded** (2026-11-14 15:01): `20261114_150142_pink` **30/30** (15 failed attempts skipped: 10 dropped, 5 missed), 4.8 GB. Verified: every episode loads, all 3 cameras, one frame per camera per step; picks 13–25 s, median 18 s.
     - **Real pick data is complete: blue 30, green 30, pink 30** (90 episodes). Next: export them (plus the sim blue/green picks if mixing) as a new Studio dataset for the ACT run.
+    - **All data is on Hugging Face** (2026-11-14 17:09): private dataset `lux13crystal/junction26-so101-duplo` (https://huggingface.co/datasets/lux13crystal/junction26-so101-duplo), 1,718 files, 71.4 GB, every file checked by size. One tar per episode: `real/` (5 sessions), `sim/gen3/`, `sim_old/`, `stills/`, `studio/` (the 2 Studio exports). `README.md` describes the format; `unpack.py` restores the station layout. Keep it private: the front and wrist cameras show people.
     - **Note for the pick policy:** pink and blue are now the same shape and size and differ only in colour. One ACT policy should pick both the same way, and choosing between them ("pick up the pink one") becomes purely a colour problem.
+30. **The real picks are cleaned with Qualia before training** (2026-11-14 ≈15:40–16:00, the user's decision).
+    - **Setup:** `uv tool install --prerelease allow qualia-cli`, then `qualia auth login --base-url https://junction-api.qualiastudios.dev --api-key …`. The key is stored in `~/.config/qualia/config.toml`.
+      - The key is **project-restricted**. Commands that touch data need `QUALIA_WORKSPACE=af6e6844-0231-45d7-8448-dfcebcd2a517`.
+      - The key **cannot** create Tasks (`task create`), publish curated versions (`dataset curate`), or read `curation-suggest`. `reject` works.
+    - **Upload:** a real-only export (`export_act.py --name real76-for-qualia`, Studio `datasets/2d9b29bf…`, LeRobot v3) went up as `junction-real76-pick`: upload `f569d7f4…`, version `d6d9646c…`, 76 episodes, 29,171 frames, 695 MB. It took about 6 min.
+      - Qualia episode index → raw episode: `~/junction26/qualia_real76_index.txt`.
+    - **Tasks:** Qualia's automatic grouping merged the colours into 2 generic tasks (66 + 10 episodes). `confirm-task-names` set the real ones (green 28, blue 26, pink 21).
+      - The blue Task could not be created with this key. The heuristic and rule checks don't need it.
+    - **Checks** (free; the VLM check would cost 1,659 credits and the account has 100):
+      - **heuristic:** 1 flag. Blue ep16 is 22.6 s against a fence of 22.3 s. Kept.
+      - **episode-rules** (`check run -c -`): 19 flags on 15 episodes:
+        - gripper flicker ×4 (Qualia-recommended);
+        - "corrections near gripper events" ×11;
+        - joint lag ×6 (133 ms on five episodes, 200 ms on one).
+    - **Rejected (6)** and listed in `~/junction26/qualia_exclude.txt`. They were also marked rejected on the Qualia upload.
+      - The four gripper-flicker episodes: blue ep22, ep44, ep45; pink ep31.
+      - Pink ep42 (2 corrections) and pink ep08 (200 ms lag).
+      - Kept: the 1-correction episodes and the 133 ms lags, which are normal leader→follower lag.
+    - **`export_act.py`:**
+      - new `--exclude FILE` (`<session>/<episode>  # reason`);
+      - the generic task "pick up the brick" of the 03:25 test pick now becomes "pick up the blue brick" from its `brick`, so the dataset has exactly 3 tasks.
+    - **Training set `pick-sim610-real69x2-qualia`:**
+      - **69 real** picks (blue 23, green 28, pink 18), each written twice, about 31% of the frames. The slow-outlier rule also dropped blue ep27 (35.4 s against a limit of 35.3 s).
+      - **610 sim** picks from gen3.
+      - Next: ACT on Modal, A100-80GB, **4 epochs**, batch 32, augmentation on.
+    - **Pink camera stalls:** 8 of the 30 pink successes were rejected for camera stalls of 0.5–8.8 s. The blue and green sessions had none. Most likely cause: sim generation (gen3, 8 workers) ran during that recording. Don't run the generator while recording.
+31. **Anomaly inspection setup: front D415 = held-brick camera, wrist = top face, top = locating only; close-range depth mask and a taught re-grip pose** (2026-11-14 ≈17:00–19:00). Fixes issues 12 and 13 in code; **nothing below has run on the real arm or cameras yet.**
+    - **Camera choice (measured on the stored crops, same blue 2×2):** front ≈ 250–300 px per brick on the table and ≈ 475 px held, best image; wrist ≈ 100–120 px, yellow cast, dark, some blur → only for the top face on the tape spot (the one view nothing covers); top ≈ 60–70 px → too few pixels for a small cross, used to find bricks and for ACT.
+    - **Depth is for the mask, not for the cross:** ink has no relief, the D415 depth noise is far larger. Depth is used to grey out everything except gripper + brick.
+    - **Close-range depth (`capture.py`, new `rs_depth.py`):** front depth now 424×240 (Min-Z ≈ 14 cm instead of ≈ 45 cm at 1280×720), plus an optional **disparity shift** through RealSense advanced mode (window near = fx·B/(shift+126), far = fx·B/shift, computed from the real intrinsics and baseline). Settings in `cam_settings.json` `front_depth` (`width`, `height`, `shift`, `near_mm`, `advanced`, `expect_z_mm`, `max_obj_mm`); bad values fall back to defaults with a warning; any failure → shift 0 or colour-only, as before. Endpoints `GET /depth/status`, `POST /depth/autotune` (brick held at WP2; sweeps shifts live, keeps the nearest consistent cluster, stores shift + expected distance), `POST /depth/reset`; "Auto-tune depth" on the Crop page. Auto-tune is refused while the arm, collector or sorter runs, and photos taken during it are flagged unmasked.
+    - **`prep.inhand_mask` fails loudly:** min depth 50 mm (was 150); only inside the front ROI; the cluster must be near (`max_obj_mm`, default 400; **set ≈ 200–250 on the station**), object-sized (≥ 30×30 mm, ≤ 300×300 mm projected), mostly with real depth, and without a brick-sized no-depth hole; holes inside the brick (pen cross) are still filled, but background seen between the jaws is not. Otherwise `None` + reason → the photo counts as unmasked → never GOOD. The real issue-13 capture is now refused instead of masked wrongly (regression test). Capture meta records `depth_cfg`, `inhand_cfg` and `depth_mask_why`.
+    - **Re-grip diagnosis (issue 12): the SO-101 has one fixed jaw.** The brick is pushed against it in the first grip, so its centre is off the wrist-roll axis; turning only `wrist_roll` by 90° puts that offset under the jaws. Fix: optional taught slots **`tape_regrip`** (+ `tape_regrip_above`) on Waypoints: the open, turned gripper straddling the released brick, fixed jaw a few mm from it. Untaught → the old computed turn.
+    - **Coverage safety rules (from the review):** a taught pose is accepted only if | |Δroll| − 90° | + |Δpan| ≤ 5° (coverage's margin), because coverage credits every re-grip as exactly 90°; the four `tape_*` poses are frozen per cycle and waypoint edits are refused while a routine runs; the pose is validated **before** the brick is set down; a retry keeps the same turn direction, and **a re-grip that needed a retry can never give GOOD** (the brick may have moved): clean photos → defect plate with "orientation not verified".
+    - **Safer motions:** release opens only partly at table height, slow first lift, a failed grip lets go at table height before lifting; after a slip the retry doesn't open at height.
+    - **Step-by-step "Test re-grip"** on Waypoints: pauses after every sub-step (N = next, 120 s timeout = STOP), shows joint errors (height diagnosis), gripper stall vs first grip and the real holding state, and writes `runs/regrip_test_<time>/` (`steps.jsonl`, `summary.json`, wrist/top jpgs).
+    - **Verified:** `make test` 185 passed / 3 skipped (was 72), `make test-flows` 15/15, `sim_test.py` passes; two independent reviews (findings above fixed, each with a regression test). **Not verified:** RealSense advanced mode on the real D415 (re-enumeration time, live depth-table changes), the real fx/baseline, the mask thresholds on real depth, and the re-grip on the real arm. The mock still has symmetric jaws, so it can't reproduce the fixed-jaw failure.
+    - **Station checks, in order:** restart the tool → log shows `front depth: 424x240 …` and no warning → `/depth/status` → brick at WP2 → Auto-tune depth → `mask_ok` at every WP2 pose → one capture, look at `_masked.jpg`. Then Waypoints → Step by step re-grip → STOP after "lifted" → teach `tape_regrip` by mirroring → card shows roll ±90°, pan ≈ 0 → Step by step again → plain Test re-grip.
 
 ---
 
@@ -576,7 +614,8 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 | 9 | 11-14 01:40 | Capture tool: no brick detected and the zoom panels blank on every camera | B (empty background) was pressed with the brick still on the spot, so the brick became part of the "table" and the difference detector couldn't see it | Deleted the bad backgrounds. B now refuses if colour detection finds anything in the area (Shift+B forces it), and `/background/clear` was added |
 | 10 | 11-14 01:50 | Auto-capture took duplicate shots, then got stuck at 6/60 | (a) "Brick moved" was a raw pixel difference against the last shot, so noise, shadows and people's lighting changes triggered it (3 identical-pose shots at 01:48:48/52/55), while a real 90° turn of the square brick looked "the same". (b) The front camera found 0 bricks: a plate nudged after B left a thin rim arc that merged with the brick, and the merged blob touched the area edge and was rejected. | Auto mode now tracks the brick's **geometric pose** (centre + minAreaRect angle, respecting 90°/180° symmetry). It shoots after 0.8 s of stable pose, if it moved ≥12 px (~6 mm) or turned ≥10°. After 4 s of "not moved enough" it shows the measured move and offers **Space = shoot anyway**. The tick is wrapped in try/except so it can't die. Detection removes thin structures with a per-camera filter (top 9, front 15, wrist 13 px at ¼ scale). New **"BACKGROUND OUTDATED"** warning when >4% of the area differs from the background. Also fixed a stillness-timer bug found while testing. |
 | 11 | 11-14 ≈02:10 | User frustrated with auto-capture; then the front preview looked frozen | Auto mode was too complex and unreliable. The page held 6 never-ending MJPEG streams, at the browser's ~6-connections-per-host limit, so one feed could starve. A camera read error also silently killed that camera's thread. | **Simplified to manual only:** one click = one capture from all cameras, never refused (no brick → the whole area is saved, flagged `brick_found: false` in meta), clicks are queued and never dropped, auto mode removed. Previews are now refreshed snapshots with no open connections. Camera threads catch errors and **reconnect after 3 s without frames**, and the page shows "FROZEN … auto-reconnecting" with frame age per camera. |
-| 12 | 11-14 ≈03:25 | Tape-spot 90° re-grip doesn't work on the real arm | Not diagnosed yet. Candidates: `tape_place` too high or too low (the block tilts or drops when released), gripper not open wide enough for the turned block, block not centred under the fingers after the turn, or the turned block too wide for the gripper | Disabled by default (decision 19). To debug later with the "test re-grip" button, watching each step. 04:30: the re-grip now opens to 90 % and closes until the fingers stall (decision 20), which covers the two width-related candidates; not yet retried on the arm |
+| 12 | 11-14 ≈03:25 | Tape-spot 90° re-grip doesn't work on the real arm | Not diagnosed yet. Candidates: `tape_place` too high or too low (the block tilts or drops when released), gripper not open wide enough for the turned block, block not centred under the fingers after the turn, or the turned block too wide for the gripper | Disabled by default (decision 19). To debug later with the "test re-grip" button, watching each step. 04:30: the re-grip now opens to 90 % and closes until the fingers stall (decision 20), which covers the two width-related candidates; not yet retried on the arm. 18:30: likely cause found (one fixed jaw, decision 31): optional taught `tape_regrip` pose, step-by-step test with logs, coverage-safe retry; not yet tried on the arm |
+| 13 | 11-14 ≈16:45 | In-hand front photo: the depth mask keeps the wrong object | The only real WP2 capture (`training_images/front/inhand/good/20261114_032612_113_blue_wp2-1`) holds the brick so close to the front D415 (≈ 475 px across) that it is inside the depth camera's minimum range: only 9 % of the brick area has depth (24 % of the whole frame). `inhand_mask` therefore kept a small blob at the top of the image and greyed out the brick. Every live held photo would come back as "no depth mask" → uncertain → defect plate. Measured brick size per camera (crops of the same blue 2×2): top ≈ 60–70 px, wrist ≈ 100–120 px (yellow cast, dark, blur), front on the table ≈ 250–300 px. Top camera: 34 reconnects since start. | Fixed in code, not yet on the camera (decision 31): front depth at 424×240 + optional disparity shift with auto-tune; `inhand_mask` refuses implausible clusters instead of masking the wrong object |
 
 ---
 
@@ -587,7 +626,15 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
   - Studio kept showing "degraded", because it holds a failed deploy in memory until the backend restarts.
   - After a backend restart (kill by PID, then the usual `serve` command) the target reports **healthy**.
   - First run: job `75217bde…`, ACT on `pick-sim604-real1x10`, **A100-80GB** (the user's choice), 15 epochs, batch 32, augmentation on, val split 5%. Submitted 12:59 via `POST /api/jobs:train` with `training_target: remote` and `modal_gpu: A100-80GB`.
-  - **Not yet confirmed: whether Modal accepts the GPU run without a card.**
+  - **Confirmed: Modal runs GPU jobs now.**
+    - Timeline: upload of the 4 GB dataset to the volume took about 7 minutes. The container started at 13:06, and training started at 13:07 on an NVIDIA A100-SXM4-80GB.
+    - Speed: **about 3.5 steps/s at batch 32**, probably limited by video decoding, not the GPU. 15 epochs = 54,450 steps ≈ 4.3 h (≈ $11–15).
+    - The user canceled at 13:10 to wait for the real picks (sim-only test run not needed).
+  - **Gotcha: canceling in Studio doesn't stop the Modal container.**
+    - The container kept running (and billing) after Studio said "canceled".
+    - Check with `.venv/bin/python -m modal container list --env main`.
+    - Stop with `.venv/bin/python -m modal container stop --yes <id>`.
+  - **Sizing the real run:** about 4–6 epochs is ≈1.5–2 h for this data size. Check the steps/s in `modal app logs` after 2 minutes.
 - Original note:
 - The $100 credit was redeemed, but Modal requires a payment method before allowing GPU functions, and it declined every card we tried.
 - **We decided to stop pursuing Modal and train locally** (decision 5).
@@ -600,6 +647,39 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
   PHYSICALAI_MODAL_IMAGE=ghcr.io/open-edge-platform/physicalai-trainer-cuda:main \
   .venv/bin/python -m modal deploy --env main src/trainer/modal_app.py
   ```
+
+#### Real training run and the CPU bottleneck (2026-11-14 16:24)
+- **Run:** job `f7a3207a`, model `act-pick-sim610-real69x2-qualia`.
+  - Dataset `e25af90c`: 748 episodes, 172,502 frames.
+  - A100-80GB, 4 epochs = 20,620 steps, batch 32, augmentation on, `val_split` 0.05.
+- **Timing:** dataset upload about 5 min; training started at 16:30.
+- **GPU:** PyTorch reports `NVIDIA A100 80GB PCIe`. Modal's function card still says "A10G", but that is the deployed default; Studio overrides the GPU per call.
+- **Speed:** 3.3 steps/s. Expected finish about 18:15, cost about $5.50.
+- **Bottleneck = CPU:**
+  - The container uses 9.6 of its 8 reserved cores to decode two AV1 frames per sample plus augmentation.
+  - `num_workers="auto"` is capped at `min(cpu_count, 8)` (`library/src/physicalai/data/lerobot/datamodule.py:173`).
+  - So neither a second GPU nor an H100 would help, and more cores only help together with more workers.
+- **Prepared for the next run** (Studio, `src/services/training_backends/modal.py`; backup in the session scratchpad):
+  - Optional per-call overrides `PHYSICALAI_MODAL_CPU` / `PHYSICALAI_MODAL_MEMORY_MB`, passed with `with_options`. They merge with the GPU override, and no redeploy is needed.
+  - It takes effect after a backend restart, **only once no Modal job is running**:
+    `cd ~/physical-ai-studio/application/backend && PHYSICALAI_MODAL_CPU=16 uv run --no-sync physicalai-studio serve >> ~/.local/share/physicalai/logs/studio-backend.log 2>&1 &`
+    (stop the old backend by its PID first).
+  - In the training request, also send `"num_workers": 16`. The API accepts 0–16.
+  - Expect roughly 2× faster (about 50–60 min for the same run) for about $0.40/h more. Unmeasured: compare steps/s against 3.3 in the first 2 minutes.
+- **A running container cannot be resized,** and remote training cannot resume, so the current run keeps its 8 cores.
+- **Preempted** (17:26):
+  - The first container stopped at step 10,660/20,620 (52%) after "Modal monitoring unavailable: Deadline exceeded".
+  - Modal re-ran the same call (`fc-01M7D7DG…`) on a new container at 17:27 from step 0, even with `retries=0`. That's a GPU preemption.
+  - The new container ran 2.4 steps/s. Studio's progress bar kept showing the old 54%, so it hid the restart; check the step counter in the logs.
+  - About $3 of compute lost.
+- **Cancelled and relaunched** (≈18:00, the user's choice):
+  - `POST /api/jobs/{id}:interrupt`; 0 containers left.
+  - Backend restarted with `PHYSICALAI_MODAL_CPU=16` (PIDs 561526/561531).
+  - New job `cd72ad9a`: same settings plus `"num_workers": 16`.
+  - **Measured:** `NVIDIA A100-SXM4-80GB`, step 1 → 1,560 in 299 s = **5.2 steps/s**, against 3.3 with 8 cores and 8 workers: **1.6× faster**. This confirms the CPU/decoding bottleneck.
+    - 20,488 steps take about 65 min, for about $3.50/h (A100 $2.50 + 16 cores ≈ $0.75 + memory) ≈ **$4 per run**.
+    - The dataset was still on the Modal volume, so the upload was skipped and training started 2.5 min after submit.
+    - It isn't 2×, so the GPU and the main process now share the limit. 32 cores would probably add little: the API caps `num_workers` at 16.
 
 ### NPU: user-space driver missing
 - **Install it** (needs sudo):

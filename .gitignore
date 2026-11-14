@@ -1,6 +1,9 @@
 # Large, machine-generated data: NOT in git (hundreds of MB to GB; copy separately, see README)
 training_images/
 episodes/
+# sorter cycle logs + photos (sorter.py) and exported anomaly models (train_anomaly.py)
+runs/
+models/
 
 # runtime junk
 __pycache__/

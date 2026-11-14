@@ -41,6 +41,8 @@ HOLD_MIN_OPEN = 50       # ... and not fully shut (ticks above the closed end) =
 HOLD_TIME = 0.3          # s the above must hold
 TAIL_S = 0.4             # keep recording this long after the grasp (the policy must learn to close firmly)
 MAX_PICK_S = 90
+REGRIP_OPEN = 0.9        # gripper opening (fraction of its range) when coming down on the released brick
+REGRIP_SQUEEZE = 80      # ticks the re-grip closes past the width where the fingers stalled on the brick
 
 
 class Collector:
@@ -57,6 +59,7 @@ class Collector:
         self.active = False; self.stop_flag = threading.Event()
         self.flags = {"grasped": False, "discard": False, "skip": False, "next": threading.Event()}
         self.session = None; self.n_done = 0; self.target = 0; self.rec = None
+        self.g_relock = None      # clamp command after the last tape re-grip (grip_on_tape)
 
     def save_cfg(self): self.cfg_path.write_text(json.dumps(self.cfg, indent=1))
 
@@ -132,21 +135,36 @@ class Collector:
         self.goto(dict(A.cmd), 0.3, gripper=g_open); time.sleep(0.2)       # open slowly
         self.goto(above, self.cfg["speed"] * 0.5, gripper=g_open)
 
-    def regrasp_90(self, g_lock, g_open):
-        """Set down on the tape spot, turn the wrist 90 deg, grip again with the SAME clamp command, lift.
-        The faces that were under the fingers are now visible. Returns True if the brick is held again."""
+    def grip_on_tape(self, g_open, turned=True):
+        """Grip the brick that lies released on the tape spot (the arm is above it, gripper open), then lift.
+        turned=True: wrist turned 90 deg first, so the faces that were under the fingers become visible.
+        Works for any brick width: opens wide, closes until the fingers STALL on the brick, then squeezes a fixed
+        amount past that width (a long brick turned 90 deg is much wider than it was in the first grip).
+        Returns (held, clamp command to keep using)."""
         A = self.A
         above = self.slot("tape_above")[0]["pos"]; place = self.slot("tape_place")[0]["pos"]
-        self.place_on_tape(g_lock, g_open)
+        gmin, gmax = A.fl["gripper"]
+        g_wide = max(g_open, gmin + REGRIP_OPEN * (gmax - gmin))
         lo, hi = A.fl["wrist_roll"]; r90 = 90 * TICK_PER_DEG
-        roll = place["wrist_roll"] + r90 if place["wrist_roll"] + r90 <= hi - 20 else place["wrist_roll"] - r90
+        roll = place["wrist_roll"]
+        if turned: roll = roll + r90 if roll + r90 <= hi - 20 else roll - r90
         self.check()
-        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_open, wrist_roll=roll)    # turn while up
-        self.goto(place, self.cfg["speed"] * 0.3, gripper=g_open, wrist_roll=roll)    # straight down, open
-        self.goto(dict(A.cmd), 0.5, gripper=g_lock); time.sleep(0.2)                  # same clamp command
+        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_wide, wrist_roll=roll)    # open wide + turn while up
+        self.goto(place, self.cfg["speed"] * 0.3, gripper=g_wide, wrist_roll=roll)    # straight down, open
+        self.goto(dict(A.cmd), 0.4, gripper=gmin)                                     # close until it stalls on the brick
+        g_new = max(gmin, A.pos["gripper"] - REGRIP_SQUEEZE)
+        self.goto(dict(A.cmd), 0.5, gripper=g_new); time.sleep(0.2)
         held = self.holding()
-        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_lock, wrist_roll=roll)    # straight up
-        return held and self.holding()
+        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_new, wrist_roll=roll)     # straight up
+        return held and self.holding(), g_new
+
+    def regrasp_90(self, g_lock, g_open, on_released=None):
+        """Set down on the tape spot, [on_released(): e.g. photograph the released brick from above], turn the wrist
+        90 deg, grip again, lift. Returns True if the brick is held again; the new clamp command is self.g_relock."""
+        self.place_on_tape(g_lock, g_open)
+        if on_released: on_released()
+        held, self.g_relock = self.grip_on_tape(g_open, turned=True)
+        return held
 
     def up_wp2(self, wp1, wp2, g_lock):
         """Straight UP out of WP2 to the pose above it."""
@@ -318,13 +336,14 @@ class Collector:
         n_img, on_tape = 0, False
         if self.cfg.get("phase2"):
             n_img, on_tape = self.phase2(wp1, wp2, g_lock, g_open, label, brick, idx)
+            if not on_tape and self.g_relock is not None: g_lock = self.g_relock      # re-gripped: keep the new clamp
         self.info = {"images": n_img}
         self.reset(home, wp1, drops, grasp_pose, g_lock, g_open, on_tape)
         return True
 
     def phase2(self, wp1, wp2, g_lock, g_open, label, brick, idx):
         """OPTIONAL: WP1 -> above WP2 -> down -> photo -> up [-> tape spot re-grip 90 deg -> photo 2]."""
-        self.state = "capture"; n_img = 0
+        self.state = "capture"; n_img = 0; self.g_relock = None
         cams = [c for c in self.cfg.get("inspect_cams", ["front"]) if c in self.S.live]
         tape = self.cfg.get("regrasp") and self.slot("tape_above") and self.slot("tape_place")
 
@@ -345,7 +364,16 @@ class Collector:
         on_tape = False
         if tape:
             self.state = "regrasp"; self.say("phase 2: set the brick down on the tape spot, re-grip it turned 90°")
-            if self.regrasp_90(g_lock, g_open):
+            rel_cams = [c for c in self.cfg.get("release_cams", ["wrist"]) if c in self.S.live]
+
+            def released():       # the brick lies on the tape spot, gripper open above it: top-view photo (training data)
+                nonlocal n_img
+                if not rel_cams: return
+                time.sleep(0.25); self.check()
+                self.say("phase 2: photo of the released brick from above (tape spot)")
+                n_img += self.ctx.capture(rel_cams, label, brick, "tape_top", idx, self.session, kind="release")
+            if self.regrasp_90(g_lock, g_open, on_released=released):
+                g_lock = self.g_relock          # the turned brick can have another width: keep the new clamp
                 self.state = "capture"
                 self.to_wp2(wp1, wp2, g_lock)
                 n_img += shoot("_r90", "(turned 90°)")
@@ -432,7 +460,7 @@ def make_router(S, A, ctx, DATA, ROOT):
         out = {}
         for lab in ("good", "defect"):
             for f in (DATA / "front" / "inhand" / lab).glob("*.png"):
-                if f.stem.endswith("_depth"): continue
+                if f.stem.endswith(("_depth", "_crop")): continue
                 parts = f.stem.split("_")
                 b = parts[3] if len(parts) > 4 else "?"
                 out.setdefault(b, {"good": 0, "defect": 0})[lab] += 1
@@ -478,7 +506,8 @@ def make_router(S, A, ctx, DATA, ROOT):
 
     @r.post("/collect/cfg")
     def cfg(home: str = "", wp1: str = "", wp2: str = "", drops: str = "", speed: float = 0,
-            roll_jitter: float = -1, inspect_cams: str = "", phase2: str = "", regrasp: str = ""):
+            roll_jitter: float = -1, inspect_cams: str = "", phase2: str = "", regrasp: str = "",
+            release_cams: str = None):
         if phase2: C.cfg["phase2"] = phase2 == "true"
         if regrasp: C.cfg["regrasp"] = regrasp == "true"
         if home: C.cfg["home"] = home
@@ -488,6 +517,7 @@ def make_router(S, A, ctx, DATA, ROOT):
         if speed: C.cfg["speed"] = min(1.0, max(0.1, speed))
         if roll_jitter >= 0: C.cfg["roll_jitter"] = min(90, roll_jitter)
         if inspect_cams: C.cfg["inspect_cams"] = [c for c in inspect_cams.split(",") if c]
+        if release_cams is not None: C.cfg["release_cams"] = [c for c in release_cams.split(",") if c]
         C.save_cfg(); return status()
 
     @r.post("/collect/roi/{cam}")
@@ -538,6 +568,7 @@ def make_router(S, A, ctx, DATA, ROOT):
         threading.Thread(target=pump, daemon=True).start()
         return status()
 
+    r.collector = C          # sorter.py reuses the collector's motion helpers (WP2 approach, tape re-grip)
     return r
 
 

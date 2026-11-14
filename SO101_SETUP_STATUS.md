@@ -11,7 +11,7 @@
 
 Running log of the setup, the decisions we made and the problems we fixed. It's written so it can feed straight into the final report.
 
-Last updated: 2026-11-14 01:00 (EET)
+Last updated: 2026-11-14 04:30 (EET)
 Challenge guide: https://github.com/open-edge-platform/physical-ai-studio/blob/junction2026/JUNCTION2026.md
 
 ---
@@ -377,6 +377,53 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - **Option B:** one language-conditioned policy (SmolVLA, "pick up the red block") on the same data.
       - Shown as a "Next" card on `/arm`.
     - **Simulated:** 2 episodes; put-back went to the pick spot with a random roll, descended slowly and released; task stored per episode; `--bricks red` export filter works.
+20. **Inspect the whole surface of any shape, then sort: phases 3-5 are built** (2026-11-14 ≈04:30, the user's rule). Code: `anomaly_capture/sorter.py` + `coverage.py`, page section **8 "Inspect the whole surface + sort"** on `/arm`, API `/sort/*`.
+    - **The rule:**
+      - An object goes to the **good plate only after its whole surface was seen and judged clean**.
+      - **The first photo that shows a defect sends it to the defect plate at once**, without checking the rest.
+      - Anything that can't be confirmed clean never counts as good: an uncertain score after retakes, a photo without a depth mask, or a part of the surface no pose can show. These go to the defect plate.
+      - A dropped object or a re-grip that fails twice stops the cycle and asks the human to put the object back.
+    - **Any shape, not only cubes** (`coverage.py`):
+      - The surface is tracked as **directions**, not named faces: 1500 points on a sphere fixed to the object, one per direction a surface can face.
+      - A photo covers every surface that faces the camera within 65° (minus a 5° safety margin), except what lies within 35° (+5°) of the finger axis.
+      - The object is "fully inspected" when every direction has been seen in a clean photo. That holds for a cube, a long box, a triangular prism or a cylinder without knowing the shape.
+      - On the page each WP2 photo pose is ticked with what it shows in the gripper's frame: **front**, **back**, **down**, **up** (two ticks = a diagonal view). The page shows the percentage covered, the planned photo sequence, and refuses START if the poses can't reach 100 %.
+      - **Minimum set of poses:** front, back (wrist turned 180°) and down (gripper pointing at the camera), plus the tape spot.
+      - The servo direction of the 90° turn isn't assumed: both directions are tracked and a direction only counts when it's seen under both.
+      - Background: this is the visibility-matrix / set-cover formulation used in inspection view planning, and the object-level "any view anomalous" rule used in multi-view anomaly detection (Real-IAD). Berkeley's Omni-Scan follows the same pattern: grasp, rotate in front of a fixed camera, then change the grasp (there by handing over to a second gripper) to see what the first grasp hid.
+    - **One cycle:**
+      1. **Pick:** hand-feed (put the object in the open gripper at WP1 and press G) or teleop with the leader. ACT comes in phase 6.
+      2. **Grip 1:** WP1 → above WP2 → down → a photo at each WP2 pose that still shows something unseen → up.
+      3. **Tape spot, only if something is still unseen:** set down → **top photo of the released object** (wrist camera, looking straight down, nothing in the way) → grip again with the wrist turned 90°.
+      4. **Grip 2:** only the WP2 poses that show what's still missing. Steps 3–4 repeat up to `max re-grips` (default 2) if needed.
+      5. **Sort:** `sort_<bin>_above` → `sort_<bin>` → open → up → home.
+      - A clean object with the minimum poses takes 6 photos and 1 re-grip. In simulation a defective one needs 2.7 photos on average, and 28 % are caught by the first photo.
+    - **Depends on the tape re-grip, which doesn't work on the real arm yet (issue 12).** Until it does, a clean object can't be confirmed good: grip 1 alone sees about 60 % of the surface. Two of issue 12's four candidate causes are addressed by the new re-grip below (opening too narrow, turned block too wide); the height of `tape_place` and centring still have to be checked with "test re-grip". MANUAL judge + hand-feed is the way to debug it step by step.
+    - **Re-grip for any width** (`collect.grip_on_tape`): the gripper opens to 90 %, closes until the fingers stall on the object, then squeezes 80 ticks past that width. The old "same clamp command" only worked when both widths were equal (a 2×4 brick turned 90° is twice as wide). Collection uses the same function.
+    - **Per photo:**
+      - The same 16-frame average as collection, then **`prep.inspect_crop()`** (held object: depth mask + square crop) or **`prep.release_crop()`** (object on the tape spot: fixed crop per camera, set on the page, stored in `inspect_settings.json`). **Training crops come from the same two functions:** `arm.capture` saves them as `*_crop.png`.
+      - Score ≥ `t_high` → defect. Score ≤ `t_low` → clean. In between → retake (up to `retries`, mean of the scores); still in between → defect plate.
+    - **Judge:**
+      - **MANUAL:** a human clicks C / D / U on each photo. This tests all the motions and the coverage logic before any model exists.
+      - **MODEL:** Anomalib OpenVINO models, `models/front/<brick>/` for held photos and `models/wrist/<brick>/` for the top photo (fallback `<cam>/all`). They run in `score_worker.py` inside the Anomalib venv as a persistent subprocess, so the two torch installs never meet. Device CPU, GPU or NPU per run.
+      - **Cascade (decision 10, optional):** `models/<cam>/<brick>_efficientad/` answers first on its own device (NPU); only photos it is unsure about go to the main model. The fast model is used only once it has calibrated thresholds.
+    - **Training and thresholds:**
+      - `~/anomalib/.venv/bin/python anomaly_capture/train_anomaly.py --brick <name> [--cam wrist] [--model efficientad] [--xpu]`. Every 5th good crop is held out (`holdout.json`).
+      - **Calibrate** on the page scores the held-out good crops and the defect crops through the live path. For each defect brick only its highest-scoring photo counts, because the cross is on one face and the other photos of that brick look clean. Result: `thresholds.json` next to the model, with AUROC and how many defect bricks never showed their cross to that camera.
+    - **Collection change:** during the tape re-grip, phase 2 now also saves the **top photo of the released object** from the wrist camera (`tape_top`, in `training_images/wrist/inhand/`). Set the crop on the page (section 8) **before** collecting, so the training crops match.
+    - **Log for the report:** `runs/<session>/log.jsonl`, one line per object: verdict, reason, every photo with scores per cascade stage, inference ms, load ms and device, surface % seen, re-grips, and pick / inspect / sort / cycle times. Photos and heat-maps are saved per cycle.
+    - **Tested without hardware:** `python3 anomaly_capture/sim_test.py` (fake arm, camera and Anomalib worker; the fake world knows where the defect really is):
+      - 400 random defect directions, both turn directions → 400/400 to DEFECT, never GOOD;
+      - cube, triangular prism, tetrahedron, cylinder and wedge in random orientations, each face defective in turn, with the width changing at the re-grip → all DEFECT; the clean ones → GOOD;
+      - uncertain photo, missing depth mask, bottom never shown, no top photo → DEFECT (fail-safe);
+      - object dropped, re-grip failing twice → cycle stopped;
+      - model judge, cascade (clean photos settled by the fast model, a subtle defect escalated), threshold calibration, HTTP API.
+    - **Not tested:** the real arm and cameras, the real Anomalib 2.7 inferencer and `train_anomaly.py`.
+    - **Assumptions that the simulation can't check:**
+      - The ticks on the page are right (look at the photos in MANUAL mode once).
+      - The object doesn't slip in the gripper.
+      - The shape is roughly convex (deep hollows can hide a cross).
+      - The object can be gripped again after a 90° turn. A triangular prism gripped on two slanted faces may squeeze out; the cycle then stops with "re-grip failed".
 
 ---
 
@@ -396,7 +443,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 | 9 | 11-14 01:40 | Capture tool: no brick detected and the zoom panels blank on every camera | B (empty background) was pressed with the brick still on the spot, so the brick became part of the "table" and the difference detector couldn't see it | Deleted the bad backgrounds. B now refuses if colour detection finds anything in the area (Shift+B forces it), and `/background/clear` was added |
 | 10 | 11-14 01:50 | Auto-capture took duplicate shots, then got stuck at 6/60 | (a) "Brick moved" was a raw pixel difference against the last shot, so noise, shadows and people's lighting changes triggered it (3 identical-pose shots at 01:48:48/52/55), while a real 90° turn of the square brick looked "the same". (b) The front camera found 0 bricks: a plate nudged after B left a thin rim arc that merged with the brick, and the merged blob touched the area edge and was rejected. | Auto mode now tracks the brick's **geometric pose** (centre + minAreaRect angle, respecting 90°/180° symmetry). It shoots after 0.8 s of stable pose, if it moved ≥12 px (~6 mm) or turned ≥10°. After 4 s of "not moved enough" it shows the measured move and offers **Space = shoot anyway**. The tick is wrapped in try/except so it can't die. Detection removes thin structures with a per-camera filter (top 9, front 15, wrist 13 px at ¼ scale). New **"BACKGROUND OUTDATED"** warning when >4% of the area differs from the background. Also fixed a stillness-timer bug found while testing. |
 | 11 | 11-14 ≈02:10 | User frustrated with auto-capture; then the front preview looked frozen | Auto mode was too complex and unreliable. The page held 6 never-ending MJPEG streams, at the browser's ~6-connections-per-host limit, so one feed could starve. A camera read error also silently killed that camera's thread. | **Simplified to manual only:** one click = one capture from all cameras, never refused (no brick → the whole area is saved, flagged `brick_found: false` in meta), clicks are queued and never dropped, auto mode removed. Previews are now refreshed snapshots with no open connections. Camera threads catch errors and **reconnect after 3 s without frames**, and the page shows "FROZEN … auto-reconnecting" with frame age per camera. |
-| 12 | 11-14 ≈03:25 | Tape-spot 90° re-grip doesn't work on the real arm | Not diagnosed yet. Candidates: `tape_place` too high or too low (the block tilts or drops when released), gripper not open wide enough for the turned block, block not centred under the fingers after the turn, or the turned block too wide for the gripper | Disabled by default (decision 19). To debug later with the "test re-grip" button, watching each step |
+| 12 | 11-14 ≈03:25 | Tape-spot 90° re-grip doesn't work on the real arm | Not diagnosed yet. Candidates: `tape_place` too high or too low (the block tilts or drops when released), gripper not open wide enough for the turned block, block not centred under the fingers after the turn, or the turned block too wide for the gripper | Disabled by default (decision 19). To debug later with the "test re-grip" button, watching each step. 04:30: the re-grip now opens to 90 % and closes until the fingers stall (decision 20), which covers the two width-related candidates; not yet retried on the arm |
 
 ---
 
@@ -442,7 +489,15 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
    4. [ ] Untick bad episodes, run the export preview, then EXPORT to Studio. Train ACT in Studio on the XPU, with cameras top + wrist.
    5. [ ] Only after all good runs: draw crosses (small first, then bigger) and run defect episodes. These add both pick data and defect images.
    6. [ ] Train PatchCore per brick on the masked WP2 good images; evaluate on the WP2 defect images; export to OpenVINO.
-6. [ ] **Later phases (not built yet):**
+6. [ ] **Inspect + sort (decision 20, built, test it now):**
+   1. [ ] `python3 anomaly_capture/sim_test.py` on the station (checks the install; needs no hardware).
+   2. [ ] **Get the tape re-grip working (issue 12)** with "test re-grip": it now opens to 90 % and closes until it feels the block.
+   3. [ ] Teach `sort_good`, `sort_defect` (+ `_above`) on `/arm` section 8.
+   4. [ ] Add WP2 photo poses for **back** (wrist turned 180°) and **down** (gripper pointing at the camera), tick them, until the page says the whole surface can be checked.
+   5. [ ] Set the top-photo crop (wrist camera, object lying on the tape spot) **before collecting more data**.
+   6. [ ] Run with **pick = hand-feed, judge = MANUAL**: defect on a side, defect under a finger, defect on top, all clean. Try a long brick too.
+   7. [ ] After the first anomaly models exist (front + wrist): judge = MODEL → calibrate → run; compare devices (CPU, GPU, NPU) and the cascade.
+7. [ ] **Later phases (not built yet):**
    1. **Phase 3, decision at WP2:** anomaly score per brick (the colour selects the model), with a threshold from the defect images. Measure the smallest cross detected.
    2. **Phase 4, sort:** WP2 → good plate or defect plate (scripted waypoints with the gripper still locked, then release), then back to the start pose.
    3. **Phase 5, all faces:** the cross can be on any face. Add more WP2 views (wrist roll and tilt for 2 sides + bottom), the top-camera check of the upward face before the pick, and a set-down + 90° regrasp for the 2 gripped faces, only if still clean. Stop as soon as a cross is found (decision 14).
@@ -457,7 +512,7 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - Measure latency per step and per cycle, power and temperature; record them in §9.
       - Possibly EfficientAd on the NPU for the cascade (decision 10).
    6. Stretch: robot-generated pick demos (the robot places the brick at a known random pose, then records the pick back), SmolVLA.
-7. [ ] Optional: `sudo usermod -aG dialout intel`, then log in again, so you don't have to re-run `setfacl` after every replug.
+8. [ ] Optional: `sudo usermod -aG dialout intel`, then log in again, so you don't have to re-run `setfacl` after every replug.
 
 ---
 

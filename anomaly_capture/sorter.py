@@ -107,7 +107,8 @@ class Sorter:
         self.judge = {"img": None, "caption": "", "answer": None, "evt": threading.Event(), "n": 0}
         self.cur = {}; self.history = []; self.totals = {"good": 0, "defect": 0, "aborted": 0}
         self.photos = []; self.session = None; self.calib = {"running": False, "result": None}
-        self._pol = None; self.clock = pol.RealClock(); self.act = None; self.act_info = None; self._roiw = (0, None)
+        self._pol = None; self.clock = pol.RealClock(); self.act = None; self.act_info = None; self._roiw = (0, None); self.trials = []
+        self._vis = None; self._vdir = None
 
     def save_cfg(self): self.cfg_path.write_text(json.dumps(self.cfg, indent=1))
     def say(self, m, ok=True): self.msg, self.ok = m, ok
@@ -222,9 +223,32 @@ class Sorter:
             self.act_info = e.info; raise
         return g_lock
 
+    def get_vision(self):
+        """vpick module, kinematics and calibration for pick = vision (loaded once; the model takes ~1 s)."""
+        if self._vis is None:
+            import vpick
+            cal = vpick.Calib(); self._vis = [vpick, vpick.Kin(cal.d.get("joint_map")), cal]
+        return self._vis
+
+    def pick_vision(self, tag=""):
+        """Scripted pick (vpick.py): the top camera finds the bricks, IK grasps the one nearest to the robot (or
+        cfg brick's colour if vision_colour is on), carry to WP1, still held? Same contract as pick_act."""
+        vp, kin, cal = self.get_vision(); c = self.cfg
+        self.state = "vision"; self.act_info = None
+        self.act = vp.VisionPick(self.A, self.C, self.S, kin, cal, retries=c["act_retries"], speed=c["act_speed"],
+                                 check=self.check, say=self.say, debug_dir=self._vdir,
+                                 target=c["brick"] if c.get("vision_colour") else None)
+        self.act.tag = tag
+        try:
+            g_lock, self.act_info = self.act.run()
+        except pol.PickFailed as e:
+            self.act_info = e.info; raise
+        return g_lock
+
     def pick(self):
         p = self.cfg["pick"]
-        return self.pick_act() if p == "act" else self.pick_teleop() if p == "teleop" else self.pick_handfeed()
+        return (self.pick_act() if p == "act" else self.pick_vision() if p == "vision" else
+                self.pick_teleop() if p == "teleop" else self.pick_handfeed())
 
     def roi_warning(self):
         if time.time() - self._roiw[0] > 10:
@@ -507,6 +531,92 @@ class Sorter:
             self.judge["img"] = None
             self.active = False; self.A.running = False; self.C.active = False
 
+    def act_test(self, n, put_back=True, mode="act"):
+        """Pick-only test of the ACT policy (no plates, no photos, no judging): n trials of start pose -> policy ->
+        hand-off -> carry to WP1 -> still held? A held brick is put back on the plate (collector's put-back: new spot,
+        turned), so the next trial starts from a new pose. A missed pick just goes back to the start pose and tries
+        the next trial from wherever the brick lies. Log: runs/acttest_<time>/trials.jsonl."""
+        A, C = self.A, self.C
+        self.active = True; A.running = True; C.active = True
+        for e in (self.stop_flag, A.stop, C.stop_flag): e.clear()
+        self.session = datetime.now().strftime("acttest_%Y%m%d_%H%M%S")
+        d = self.RUNS / self.session; d.mkdir(parents=True, exist_ok=True)
+        (d / "settings.json").write_text(json.dumps({**self.cfg, "n": n, "put_back": put_back}, indent=1))
+        self.trials = []; self._vdir = d if mode == "vision" else None
+        try:
+            if mode == "vision": vp, kin, cal = self.get_vision()
+            else: self.get_policy()
+            home = C.wps("home")[0]["pos"]; wp1 = C.wps("wp1")[0]["pos"]; g_open = self.g_open()
+            for i in range(1, n + 1):
+                self.check(); t0 = time.time(); err = None
+                try:
+                    g_lock = self.pick_vision() if mode == "vision" else self.pick_act(); ok = True
+                except pol.PickFailed as e:
+                    ok, err = False, str(e)
+                    if not e.retry: raise
+                ai = self.act_info or {}
+                rec = {"trial": i, "ok": ok, "error": err, "t_s": round(time.time() - t0, 1),
+                       "pick_s": (ai.get("attempts") or [{}])[-1].get("t_s"), "act": ai}
+                self.trials.append({k: v for k, v in rec.items() if k != "act"})
+                with open(d / "trials.jsonl", "a") as f: f.write(json.dumps(rec) + "\n")
+                if self.act is not None and getattr(self.act, "trace", None):      # t, follower pos x6, policy target x6 (ticks), last attempt
+                    np.save(d / f"trial{i:02d}_trace.npy", np.array(self.act.trace, dtype=np.float32))
+                k = sum(t["ok"] for t in self.trials)
+                self.say(f"trial {i}/{n}: {'PICKED' if ok else 'MISSED'} · {k}/{i} so far", ok)
+                if ok and put_back and mode == "vision":
+                    self.place_and_look(i, g_lock, home, g_open, d)
+                elif ok and put_back:
+                    C.reset(home, wp1, C.slot("drops"), self.act.grasp_pose or dict(A.cmd), g_lock, g_open, False)
+                    C.state = "idle"
+                elif ok:
+                    self.state = "help"; self.flags["next"].clear()
+                    self.say(f"trial {i}/{n} PICKED: holding it at WP1. Take the brick / put it on the plate, then NEXT")
+                    while not self.flags["next"].wait(0.1): self.check()
+                    C.goto(dict(A.cmd), 0.4, gripper=g_open); C.goto(home, gripper=g_open)
+                else:
+                    C.goto(dict(A.cmd), 0.4, gripper=g_open); C.rise(wp1); C.goto(home, gripper=g_open)
+                time.sleep(0.5)
+            k = sum(t["ok"] for t in self.trials)
+            self.state = "done"; self.say(f"✓ ACT TEST DONE: {k}/{n} picked · log: runs/{self.session}")
+        except Stopped:
+            self.state = "stopped"; self.say("STOPPED: arm holds its position", False)
+        except Exception as e:
+            self.state = "error"; self.say(f"ERROR: {e} (arm holds its position)", False)
+        finally:
+            try: C.hold_here()
+            except Exception: pass
+            self.active = False; A.running = False; C.active = False
+
+    def place_and_look(self, i, g_lock, home, g_open, d):
+        """Test loop of pick = vision: set the held brick down at a random free spot of the plate with a random turn,
+        go home, look where it really is. Each round gives one exact pixel <-> arm pair (vpick_pairs.jsonl); the
+        calibration is refitted every 5 pairs, so the test also tunes itself."""
+        import math, random
+        vp, kin, cal = self.get_vision(); V = self.act; C = self.C
+        last = V.attempts[-1]; others = V.seen; pl = V.plate            # from the pick's look (the arm hides the plate now)
+        if pl is None: raise RuntimeError("place: the plate was not seen")
+        mm = cal.mm_per_px(pl[0], pl[1])
+        for _ in range(300):
+            rr = pl[2] * 0.52 * math.sqrt(random.random()); a = random.uniform(0, 2 * math.pi)
+            u, v = pl[0] + rr * math.cos(a), pl[1] + rr * math.sin(a)
+            if all(math.hypot(u - o[0], v - o[1]) * mm > 62 for o in others): break
+        yaw = random.uniform(-math.pi / 2, math.pi / 2)
+        self.state = "place"; self.say(f"trial {i}: setting the brick down at a new spot")
+        rel = V.place(u, v, yaw, g_lock)
+        C.goto(home, gripper=g_open)
+        _, bricks, _ = V.look()
+        near = sorted(bricks, key=lambda b: math.hypot(b["c"][0] - u, b["c"][1] - v))
+        if near and math.hypot(near[0]["c"][0] - u, near[0]["c"][1] - v) * mm < 30 and near[0]["colour"] == last.get("brick"):
+            b = near[0]; err = (cal.xy(*b["c"]) - np.array(rel["xyz"][:2])) * 1000
+            vp.add_pair(b["c"], rel["xyz"], yaw=rel["yaw"], angle=b["angle"], colour=b["colour"], err_mm=[round(float(e), 1) for e in err])
+            with open(d / "places.jsonl", "a") as fh: fh.write(json.dumps({"trial": i, "px": b["c"], **rel, "err_mm": err.tolist()}) + "\n")
+            n = sum(1 for _ in open(vp.PAIRS))
+            if n >= 4 and n % 5 == 0 or n == 4:
+                new, txt = vp.refit(cal)
+                if new is not None: self._vis[2] = new
+                self.say(f"calibration {txt}")
+        C.state = "idle"
+
     # ------------------------------------------------------------------ threshold calibration (same path as runtime)
     def _episode_of(self):
         """crop stem -> (run, cycle): which brick-handling a photo belongs to (from training_images/meta.jsonl)."""
@@ -565,7 +675,7 @@ class Sorter:
                 "judge": self.judge["img"] is not None, "judge_caption": self.judge["caption"], "judge_n": self.judge["n"],
                 "photos": [c for c, _ in self.photos], "calib": self.calib, "region_names": cov.REGION_NAMES,
                 "live": self.S.live,
-                "act": {"loaded": self._pol[1].label if self._pol else None, "live": self.act.live if self.act else {},
+                "act": {"loaded": self._pol[1].label if self._pol else None, "trials": self.trials, "live": self.act.live if self.act else {},
                         "last": {k: v for k, v in (self.act_info or {}).items() if k != "attempts"},
                         "roi_warning": self.roi_warning() if self.cfg["pick"] == "act" else None}}
 
@@ -606,6 +716,27 @@ def make_router(S, A, ctx, C, DATA, ROOT):
                     T.scorer.find(T.cfg["release_cam"], T.cfg["brick"])
             except Exception as e: return bad(str(e))
         threading.Thread(target=T.run, args=(max(1, n),), daemon=True).start()
+        time.sleep(0.1); return T.status()
+
+    @r.post("/sort/act_test")
+    def act_test(n: int = 1, put_back: bool = True, mode: str = "act"):
+        """Pick-only ACT test (see Sorter.act_test): needs home + wp1 and a policy export, nothing else."""
+        def bad(m): T.say(m, False); return T.status()
+        if T.active or C.active or A.running: return bad("busy: STOP the running job first")
+        if A.f is None: return bad("connect the arm first (section 1)")
+        try:
+            for k in ("home", "wp1"): C.wps(k)
+        except Exception as e: return bad(str(e))
+        if mode == "vision":
+            if "top" not in S.live: return bad("the vision pick needs the top camera, which is not live")
+        else:
+            if not T.cfg["act_model"]: return bad("choose a policy export first")
+            try:
+                d = pol.describe(pol.resolve(T.cfg["act_model"], T.cfg["act_backend"])[0]) or {}
+                miss = [c for c in d.get("cams", []) if c not in S.live]
+                if miss: return bad(f"the ACT policy needs camera {', '.join(miss)}, which is not live")
+            except Exception as e: return bad(f"pick = ACT: {e}")
+        threading.Thread(target=T.act_test, args=(max(1, min(200, n)), put_back, "vision" if mode == "vision" else "act"), daemon=True).start()
         time.sleep(0.1); return T.status()
 
     @r.get("/sort/policies")
@@ -676,7 +807,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
             fast_device: str = "", view_deg: float = -1, finger_deg: float = -1, max_regrasps: int = -1,
             act_model: str = None, act_device: str = "", act_backend: str = "", act_mode: str = "", act_max_s: float = -1,
             act_retries: int = -1, act_speed: float = -1):
-        if pick in ("handfeed", "teleop", "act"): T.cfg["pick"] = pick
+        if pick in ("handfeed", "teleop", "act", "vision"): T.cfg["pick"] = pick
         if act_model is not None: T.cfg["act_model"] = act_model.strip()
         if act_device in pol.DEVICES: T.cfg["act_device"] = act_device
         if act_backend in ("auto",) + pol.BACKENDS: T.cfg["act_backend"] = act_backend

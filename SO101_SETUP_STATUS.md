@@ -596,6 +596,28 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Verified:** `make test` 185 passed / 3 skipped (was 72), `make test-flows` 15/15, `sim_test.py` passes; two independent reviews (findings above fixed, each with a regression test). **Not verified:** RealSense advanced mode on the real D415 (re-enumeration time, live depth-table changes), the real fx/baseline, the mask thresholds on real depth, and the re-grip on the real arm. The mock still has symmetric jaws, so it can't reproduce the fixed-jaw failure.
     - **Station checks, in order:** restart the tool → log shows `front depth: 424x240 …` and no warning → `/depth/status` → brick at WP2 → Auto-tune depth → `mask_ok` at every WP2 pose → one capture, look at `_masked.jpg`. Then Waypoints → Step by step re-grip → STOP after "lifted" → teach `tape_regrip` by mirroring → card shows roll ±90°, pan ≈ 0 → Step by step again → plain Test re-grip.
 
+33. **Real-arm test of the ACT pick, a pick-only test tool, and a scripted vision pick started and parked** (2026-11-14 ≈19:30–20:00, intel-2f).
+    - **Pick-only test:** `POST /sort/act_test?n=5[&put_back=1]` (`sorter.act_test`). The full `/sort` cycle can't start before the plates are taught, so this runs only: start pose → policy → hand-off → carry to WP1 → still held?
+      - A held brick is put back with the collector's put-back (new spot, turned). A miss opens the gripper and goes back to the start pose.
+      - Log: `runs/acttest_<time>/trials.jsonl` plus `trialNN_trace.npy` (t, follower position ×6, policy target ×6, in ticks).
+      - Settings used: openvino on GPU, chunk mode, `act_speed` 0.5, `act_max_s` 30, `act_retries` 0.
+    - **Result for `5d03db18`, one pink brick: 0/10.**
+      - Run 1 (`acttest_20261114_193448`): 5/5 hand-offs fired after about 1.8 s with an empty gripper.
+        - Cause: in the demos the leader's gripper rests shut at the start (commanded 3–5 %) while the follower starts 35 % open. The policy learned that and commands "closed" from step 0. Fingers closing in the air count as "closed on a brick" for the lift rule, and the move from home to the plate projects toward WP1, so it reads as a lift.
+        - Fix (`policy.ActPick.attempt`): a hand-off also needs the fingers stalled on something (not moving for 0.25 s, not shut, commanded tighter than they are). Checked against the demos: true near the hand-off in 92/92 successful picks.
+        - A first idea, "arm the detector only after the gripper opened above 40 %", was wrong: the humans open only 19–40 % before grasping. `tests/test_policy.py` caught it.
+      - Run 2 (`acttest_20261114_193859`, with the fix): trial 1 was a real attempt (over the plate, opened, closed twice beside the brick, 16 s). Trials 2–5 went straight into the carry-to-WP1 motion with the gripper shut.
+      - Inference 11–14 ms p50, 30 Hz, no late ticks: timing is not the problem.
+    - **Scripted vision pick (`anomaly_capture/vpick.py`), parked by the user at ≈20:00 in favour of the next ACT round.** Not run on the arm.
+      - Built because the user asked for a 90 % pick rate with one or more bricks on the plate.
+      - `detect()`: bricks on the orange plate from the top camera. The plate, its shadows and its glare all keep an orange hue (H 0–23), so everything else inside the plate hull is a brick; pink needs S ≥ 108 (glare is 76–101). Gives centre, angle and size per brick.
+      - `Calib`: pixel → table xy as a homography fitted in the kinematic model's own frame, from the teleop picks (brick pixel in the first top frame ↔ FK of the joints where the fingers stalled on it). 89 picks, 61 inliers, **6.7 mm median, 10.1 mm p90**. The sim session's independent fit gave 7.5 mm.
+      - `plan_grasps()`: nearest brick to the robot first; jaws across the short side (both directions for a 2×2); the fixed jaw is kept 9 mm off the brick and the moving jaw pushes the brick across; the direction with the most room to the neighbours and the rim wins.
+      - `VisionPick`: hover, **servo the measured joints onto the IK pose** (the servos sag up to 3.5° under gravity), step down with a contact stop, close until the fingers stall, squeeze, rise, WP1, held?
+      - `place()` + `sorter.place_and_look()`: set the brick down at a random spot and look again. Each round gives one exact pixel ↔ arm pair and refits the calibration.
+      - Tested only offline (detector on 35 demo frames, the whole sequence on a fake arm). `pick = vision` and `/sort/act_test?mode=vision` exist but are untested on hardware.
+    - **Mistake to avoid:** I ran `git stash` to compare test results while two other sessions had uncommitted edits in the tree. It was restored within about 10 s, but never stash, checkout or reset in this shared tree.
+
 ---
 
 ## 5. Issues and fixes log

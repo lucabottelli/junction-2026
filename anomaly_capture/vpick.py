@@ -1,0 +1,511 @@
+"""Vision pick: the top camera finds the bricks on the orange plate, the arm's kinematics turn the chosen brick's
+position and angle into a grasp, and a scripted move picks it. Deterministic alternative to pick = ACT.
+
+    detect(img)            bricks on the plate: centre, angle, size (pixels of the FULL top frame), colour
+    Kin                    SO-101 forward / inverse kinematics in servo ticks (MuJoCo model + IK from sim/)
+    Calib                  pixel -> table (x, y) in the kinematic model's frame + grasp height, fitted from data
+    VisionPick(...).run()  one pick with retries -> (clamp command g_lock, info), like policy.ActPick
+
+Why the calibration is fitted in the model's own frame: the model's joint zeros are not measured, so its absolute
+positions are a few cm off. Fitting pixel -> FK(joints that really held / released a brick there) makes the same
+model error appear on both sides, where it cancels.
+
+    python vpick.py --fit-demos      first calibration from the recorded teleop picks (episodes/)
+    python vpick.py --show IMG       draw the detections on a saved top frame
+"""
+import json, math, sys, tempfile, time
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+CALIB = HERE / "vpick_calib.json"
+JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+
+# ---------------------------------------------------------------------------------------------- detection
+PLATE_HSV = ((3, 140, 80), (20, 255, 255))     # the orange plate (OpenCV H 0-180)
+PLATE_HUE = (0, 23)                            # plate, its shadows and its glare all keep this hue
+MIN_SAT, MIN_VAL = 70, 45                      # below: glare (white) or noise, hue means nothing
+COLOURS = {"pink": (160, 180), "green": (24, 75), "blue": (85, 130)}     # hue classes; anything else = "other"
+PINK_MIN_SAT = 108                             # the salmon brick has S ~134; plate glare with a pink hue S 76-101
+MIN_SHORT_MM = 14.0                            # thinner than any brick face: a glare streak
+MIN_AREA_MM2, MAX_AREA_MM2 = 250.0, 4500.0     # a 2x2 seen from above is ~1000 mm2, a 2x4 ~2000
+PLATE_R_MM = 96.0                              # outer radius of the orange plate (194 px at 0.497 mm/px)
+
+
+def plate_mask(img):
+    """The orange plate as a filled convex hull (bricks leave holes in the colour mask), rim eroded off.
+    -> (mask uint8, (cx, cy, r) of the hull in pixels) or (None, None)."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    m = cv2.inRange(hsv, np.array(PLATE_HSV[0]), np.array(PLATE_HSV[1]))
+    k = max(3, int(round(img.shape[1] / 250)) | 1)
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    n, lab, st, _ = cv2.connectedComponentsWithStats(m)
+    if n < 2: return None, None
+    i = 1 + int(np.argmax(st[1:, 4]))
+    pts = np.column_stack(np.nonzero(lab == i))[:, ::-1].astype(np.int32)
+    hull = cv2.convexHull(pts)
+    (cx, cy), r = cv2.minEnclosingCircle(hull)
+    out = np.zeros(img.shape[:2], np.uint8); cv2.fillConvexPoly(out, hull, 255)
+    e = max(3, int(r * 0.10)) | 1                      # the rim is ~8 % of the radius: bricks can't lie there
+    return cv2.erode(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (e, e))), (float(cx), float(cy), float(r))
+
+
+def detect(img, roi=None, mm_per_px=None):
+    """Bricks on the orange plate. img = top-camera frame (BGR); roi = (x0, y0, x1, y1) if img is that crop of the
+    full frame, resized to img's size (the recorded episodes are). All pixel values returned are in FULL-frame
+    pixels. -> (list of {"c": (u, v), "angle": deg of the long side in the image (0..180), "size": (long, short) px,
+    "area": px2, "colour": name, "box": 4 corners}, plate (cx, cy, r) or None)."""
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = roi or (0, 0, w, h)
+    sx, sy = (x1 - x0) / w, (y1 - y0) / h              # full-frame px per image px
+    pm, plate = plate_mask(img)
+    if pm is None: return [], None
+    hsv = cv2.cvtColor(cv2.GaussianBlur(img, (5, 5), 0), cv2.COLOR_BGR2HSV)
+    H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    fg = (pm > 0) & (S >= MIN_SAT) & (V >= MIN_VAL) & ~((H >= PLATE_HUE[0]) & (H <= PLATE_HUE[1]))
+    mmpp = mm_per_px or PLATE_R_MM / plate[2]          # rough scale from the plate's outer radius, mm per image px
+    k = max(3, int(round(2.5 / mmpp)) | 1)
+    out = []
+    for name, (lo, hi) in list(COLOURS.items()) + [("other", (None, None))]:
+        if lo is None:
+            m = fg & ~np.any([(H >= a) & (H <= b) for a, b in COLOURS.values()], axis=0)
+        else:
+            m = fg & (H >= lo) & (H <= hi)
+            if name == "pink": m &= S >= PINK_MIN_SAT
+        m = cv2.morphologyEx(m.astype(np.uint8) * 255, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))   # studs, highlights
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cs:
+            a_mm = cv2.contourArea(c) * mmpp * mmpp
+            if not MIN_AREA_MM2 <= a_mm <= MAX_AREA_MM2: continue
+            c = cv2.convexHull(c).astype(np.float32)
+            c[:, 0, 0] = x0 + c[:, 0, 0] * sx; c[:, 0, 1] = y0 + c[:, 0, 1] * sy       # -> full-frame pixels
+            (cu, cv_), (rw, rh), ang = cv2.minAreaRect(c)
+            if rw < rh: rw, rh, ang = rh, rw, ang + 90
+            if rh / ((sx + sy) / 2) * mmpp < MIN_SHORT_MM: continue
+            out.append({"c": (float(cu), float(cv_)), "angle": float(ang % 180), "size": (float(rw), float(rh)),
+                        "area": float(cv2.contourArea(c)), "area_mm2": float(a_mm), "colour": name,
+                        "box": cv2.boxPoints(((cu, cv_), (rw, rh), ang)).tolist()})
+    return out, (x0 + plate[0] * sx, y0 + plate[1] * sy, plate[2] * sx)
+
+
+def draw(img, bricks, plate=None, roi=None, pick=None):
+    """Debug picture: detections drawn on img (same roi convention as detect)."""
+    h, w = img.shape[:2]; x0, y0, x1, y1 = roi or (0, 0, w, h); sx, sy = w / (x1 - x0), h / (y1 - y0)
+    P = lambda p: (int(round((p[0] - x0) * sx)), int(round((p[1] - y0) * sy)))
+    out = img.copy()
+    if plate: cv2.circle(out, P(plate[:2]), int(plate[2] * sx), (255, 255, 255), 1)
+    for i, b in enumerate(bricks):
+        col = (0, 255, 255) if pick is not None and i == pick else (255, 255, 255)
+        cv2.polylines(out, [np.array([P(p) for p in b["box"]], np.int32)], True, col, 2 if col[0] == 0 else 1)
+        cv2.circle(out, P(b["c"]), 3, col, -1)
+        cv2.putText(out, f"{b['colour']} {b['angle']:.0f}", (P(b["c"])[0] + 6, P(b["c"])[1] - 6), 0, 0.45, col, 1)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- kinematics
+class Kin:
+    """SO-101 kinematics in servo ticks. Model + IK come from sim/ (station.py, the plugin's ArmIK); positions are
+    in the model's frame (base at the origin, metres), which is only self-consistent, not measured (see Calib)."""
+    def __init__(self, joint_map=None):
+        """joint_map = the ticks <-> radians map a calibration was fitted with (Calib.d["joint_map"]); None = the
+        current one of sim/calibration.json. A stored calibration must keep using its own map."""
+        sys.path.insert(0, str(ROOT / "sim"))
+        import logging, warnings
+        import mujoco, station
+        from physicalai_mujoco_plugin.compose import compose_scene
+        from physicalai_mujoco_plugin.conveyor_demo import ArmIK
+        from physicalai_mujoco_plugin.profiles.registry import get_profile
+        logging.getLogger("physicalai_mujoco_plugin").setLevel(logging.WARNING)
+        self.mj, self.st = mujoco, station
+        self.cal = station.load_calib()
+        if joint_map: self.cal = {**self.cal, **joint_map}
+        self.joint_map = {k: self.cal[k] for k in ("follower_limits", "joints", "gripper")}
+        with warnings.catch_warnings(), tempfile.TemporaryDirectory() as td:      # own scene file: sim/ is not written
+            warnings.simplefilter("ignore")
+            self.m = compose_scene(station.build_xml(self.cal, Path(td) / "station.xml"), get_profile("so101")).model
+        self.ik = ArmIK(self.m)
+
+    def rad(self, ticks):
+        """ticks: dict by joint name or array (.., 6) -> radians (6,)"""
+        if isinstance(ticks, dict): ticks = [ticks[j] for j in JOINTS]
+        return self.st.ticks_to_rad(np.asarray(ticks, np.float64), self.cal)[0]
+
+    def ticks(self, q5, gripper):
+        t = self.st.rad_to_ticks(np.r_[np.asarray(q5, np.float64)[:5], 0.0], self.cal)[0]
+        return {**{j: float(t[i]) for i, j in enumerate(JOINTS[:5])}, "gripper": float(gripper)}
+
+    def fk(self, q):
+        """q radians (>= 5) -> (tcp xyz m, jaw closing yaw rad, tilt of the fingers from straight down rad)"""
+        ik = self.ik; ik.data.qpos[ik.qpos_adr] = np.asarray(q)[:5]; self.mj.mj_kinematics(self.m, ik.data)
+        return ik.tcp(ik.data).copy(), ik.gripper_yaw(ik.data), ik.tilt(ik.data)
+
+    def solve(self, q0, target, yaw, iters=80):
+        """Joint angles (5,) putting the grasp point at target with the jaws closing along yaw (mod 180 deg: both
+        flips are tried, the smaller wrist turn wins). -> (q, position error m, tilt rad, yaw used)"""
+        best = None
+        for flip in (0.0, math.pi):
+            q, err = self.ik.solve(np.asarray(q0, np.float64)[:5].copy(), np.asarray(target, np.float64), yaw + flip, iters=iters)
+            _, got, tilt = self.fk(q)
+            dyaw = abs((got - yaw - flip + math.pi) % (2 * math.pi) - math.pi)
+            score = (err > 0.004) * 10 + (dyaw > math.radians(10)) * 3 + abs(q[4] - q0[4]) * 0.3 + tilt * 0.2
+            if best is None or score < best[0]: best = (score, q, float(err), float(tilt), yaw + flip, float(dyaw))
+        return best[1:]
+
+
+# ---------------------------------------------------------------------------------------------- calibration
+class Calib:
+    """pixel (full top frame) -> grasp point (x, y, z) in the model frame. H = 3x3 homography (plate plane),
+    z = a + b*x + c*y (the grasp height the kinematic model needs there, absorbs the model's lift/elbow error)."""
+    def __init__(self, d=None):
+        d = d or json.loads(CALIB.read_text())
+        self.d = d; self.H = np.array(d["H"], np.float64); self.z = np.array(d["z"], np.float64)
+
+    def xy(self, u, v):
+        p = self.H @ np.array([u, v, 1.0]); return p[:2] / p[2]
+
+    def xyz(self, u, v):
+        x, y = self.xy(u, v); return np.array([x, y, self.z[0] + self.z[1] * x + self.z[2] * y])
+
+    def dir_world(self, u, v, angle_deg):
+        """Image direction (deg, as detect() gives it) at pixel (u, v) -> world yaw (rad)."""
+        a = math.radians(angle_deg); d = 20.0
+        p0, p1 = self.xy(u - d * math.cos(a), v - d * math.sin(a)), self.xy(u + d * math.cos(a), v + d * math.sin(a))
+        return math.atan2(p1[1] - p0[1], p1[0] - p0[0])
+
+    def mm_per_px(self, u, v):
+        return float(np.linalg.norm(self.xy(u + 10, v) - self.xy(u, v)) * 100)
+
+    @staticmethod
+    def fit(px, xyz, ransac_mm=12.0):
+        """px (N, 2) full-frame pixels, xyz (N, 3) model-frame metres -> (dict for Calib, residuals mm (N,), inliers)"""
+        px, xyz = np.asarray(px, np.float64), np.asarray(xyz, np.float64)
+        H, inl = cv2.findHomography(px, xyz[:, :2] * 1000, cv2.RANSAC, ransac_mm)       # mm for conditioning
+        inl = inl.ravel().astype(bool)
+        H = H / 1000.0; H[2] *= 1000.0                                                  # -> metres out
+        A = np.column_stack([np.ones(inl.sum()), xyz[inl, 0], xyz[inl, 1]])
+        z, *_ = np.linalg.lstsq(A, xyz[inl, 2], rcond=None)
+        c = Calib({"H": H.tolist(), "z": z.tolist()})
+        res = np.array([np.linalg.norm(c.xy(*p) - q[:2]) for p, q in zip(px, xyz)]) * 1000
+        return c.d, res, inl
+
+
+# ---------------------------------------------------------------------------------------------- grasp planning
+REF_W = 0.032            # brick width the calibration's "TCP at the grasp" belongs to (a 2x2 held across 32 mm)
+FIX_CLEAR = 0.009        # gap left between the fixed jaw and the brick: the moving jaw pushes the brick across it
+MOV_CLEAR = 0.014        # gap on the moving jaw's side when open
+SQUARE = 1.28            # long / short side below this: both jaw directions are tried
+TICKS_SHUT, TICKS_PER_M = 1930.0, 9700.0     # gripper ticks with the jaws shut on nothing; ticks per metre of gap
+MAX_GRASP_W = 0.052
+HOVER = 0.055            # m above the grasp point where the arm lines up before going down
+FINGER = 0.011           # half thickness of a jaw, for the clearance to the neighbours
+
+
+def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
+    """Every way to grasp every brick, best first. Bricks are ordered nearest to the robot first (the user's rule);
+    within a brick, the jaw direction with the most room to the neighbours and the plate rim wins.
+    -> list of {"i": brick index, "xyz": TCP target, "yaw": jaw yaw (fixed -> moving jaw), "q": joints rad,
+    "open": gripper ticks, "width": m, "clear": m, "dist": m from the robot base}"""
+    W = []
+    for b in bricks:
+        u, v = b["c"]; mm = calib.mm_per_px(u, v) / 1000.0
+        W.append({"c": calib.xy(u, v), "long": b["size"][0] * mm, "short": b["size"][1] * mm,
+                  "th": calib.dir_world(u, v, b["angle"])})
+    pc = calib.xy(*plate[:2]) if plate else None
+    pr = (plate[2] * calib.mm_per_px(*plate[:2]) / 1000.0 * 0.80) if plate else None      # flat part of the dish
+    out = []
+    for i, w in enumerate(W):
+        opts = [(w["th"] + math.pi / 2, w["short"])]
+        if w["long"] / max(1e-6, w["short"]) < SQUARE: opts.append((w["th"], w["long"]))
+        for yaw0, width in opts:
+            width = min(width, 0.040) if width < MAX_GRASP_W else width      # side faces inflate the blob a little
+            if width > MAX_GRASP_W: continue
+            for flip in (0.0, math.pi):
+                yaw = yaw0 + flip; x = np.array([math.cos(yaw), math.sin(yaw)])
+                shift = FIX_CLEAR + max(0.0, width - REF_W) / 2
+                c = w["c"] - shift * x                                        # TCP: fixed jaw FIX_CLEAR off the brick
+                fingers = [w["c"] - (width / 2 + FIX_CLEAR + FINGER) * x, w["c"] + (width / 2 + MOV_CLEAR + FINGER) * x]
+                clear = 1.0
+                for j, o in enumerate(W):
+                    if j == i: continue
+                    clear = min(clear, min(np.linalg.norm(f - o["c"]) for f in fingers) - math.hypot(o["long"], o["short"]) / 2 - FINGER)
+                if pc is not None: clear = min(clear, min(pr - np.linalg.norm(f - pc) for f in fingers) + 0.02)
+                z = calib.z[0] + calib.z[1] * c[0] + calib.z[2] * c[1]
+                q, err = kin.ik.solve(np.asarray(q_seed, np.float64)[:5].copy(), np.array([c[0], c[1], z]), yaw, iters=80)
+                _, got, tilt = kin.fk(q)
+                roll = kin.ticks(q, 0)["wrist_roll"]
+                if err > 0.004 or abs((got - yaw + math.pi) % (2 * math.pi) - math.pi) > math.radians(12): continue
+                if not roll_limits[0] + 30 <= roll <= roll_limits[1] - 30: continue
+                gap = width + FIX_CLEAR + MOV_CLEAR
+                out.append({"i": i, "xyz": [float(c[0]), float(c[1]), float(z)], "yaw": float(yaw), "q": q.tolist(),
+                            "open": TICKS_SHUT + TICKS_PER_M * gap, "width": float(width), "clear": float(clear),
+                            "tilt": float(tilt), "dist": float(np.linalg.norm(w["c"])), "centre": w["c"].tolist(),
+                            "turn": float(abs(q[4] - q_seed[4]))})
+    # nearest brick first; a blocked grasp (fingers would land on a neighbour) goes behind every free one
+    out.sort(key=lambda g: (g["clear"] < 0.004, round(g["dist"] / 0.015), -min(g["clear"], 0.02), g["turn"]))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- the pick
+class VisionPick:
+    """One pick with retries, same contract as policy.ActPick: run() -> (clamp command g_lock, info) or raises
+    PickFailed / Stopped. A = arm.Arm, C = collect.Collector, S = capture state (frames, frame_t)."""
+    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None):
+        import policy as pol
+        self.pol = pol
+        self.A, self.C, self.S, self.kin, self.calib = A, C, S, kin, calib
+        self.retries, self.speed = int(retries), float(speed)
+        self.check = check or (lambda: None); self.say = say or (lambda m, ok=True: None)
+        self.debug_dir = Path(debug_dir) if debug_dir else None
+        self.target = target                    # colour to pick ("" / None = the brick nearest to the robot)
+        self.attempts = []; self.grasp_pose = None; self.live = {}; self.tried = set(); self.g_lock = None; self.z_rel = 0.0
+        self.plate = None; self.seen = []
+
+    # ---- small helpers
+    def _check(self):
+        self.check()
+        if self.A.stop.is_set(): raise self.pol.Stopped()
+
+    def _q_now(self): return self.kin.rad(self.A.pos)
+
+    def _goto(self, q5, gripper, speed, off=None):
+        t = self.kin.ticks(q5, gripper)
+        if off:
+            for n, v in off.items(): t[n] += v
+        self._check(); self.C.goto(t, self.C.cfg["speed"] * speed * self.speed); return t
+
+    def _servo_in(self, q5, gripper, tol=6, iters=4):
+        """Make the MEASURED joints equal q5: the servos sag a few degrees under gravity, so the command is pushed
+        past the target by what is still missing. -> the offsets (ticks) that hold the arm there."""
+        tgt = self.kin.ticks(q5, gripper); off = {n: 0.0 for n in self.pol.BODY}
+        for _ in range(iters):
+            self._goto(q5, gripper, 0.35, off); time.sleep(0.2)
+            err = {n: tgt[n] - self.A.pos[n] for n in self.pol.BODY}
+            if max(abs(e) for e in err.values()) <= tol: break
+            for n in off: off[n] += max(-80.0, min(80.0, err[n]))
+        return off
+
+    def look(self):
+        """A fresh top frame with the arm at home (out of the picture) -> (frame, bricks, plate)."""
+        t0 = time.time()
+        while self.S.frame_t.get("top", 0) < t0 + 0.12:
+            self._check()
+            if time.time() - t0 > 3: raise self.pol.PickFailed("the top camera gives no fresh frame", retry=False)
+            time.sleep(0.03)
+        f = self.S.frames["top"].copy()
+        bricks, plate = detect(f)
+        return f, bricks, plate
+
+    def _save(self, name, img):
+        if self.debug_dir is not None:
+            try: cv2.imwrite(str(self.debug_dir / name), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            except Exception: pass
+
+    # ---- one attempt
+    def attempt(self, k, tag=""):
+        A, C, kin = self.A, self.C, self.kin
+        gmin = A.fl["gripper"][0]
+        f, bricks, plate = self.look()
+        every = bricks
+        if self.target: bricks = [b for b in bricks if b["colour"] == self.target] or bricks
+        if not bricks: raise self.pol.PickFailed("no brick found on the orange plate", retry=False)
+        wp1 = kin.rad(C.wps("wp1")[0]["pos"])
+        plans = plan_grasps(bricks, self.calib, kin, wp1, A.fl["wrist_roll"], plate)
+        if not plans:
+            self._save(f"{tag}look.jpg", draw(f, bricks, plate)); return "unreachable", {"bricks": len(bricks)}
+        key = lambda x: (round(x["centre"][0] / 0.01), round(x["centre"][1] / 0.01), round(math.degrees(x["yaw"]) / 20) % 9)
+        g = next((x for x in plans if key(x) not in self.tried), plans[0])    # a retry takes another jaw direction / brick
+        self.tried.add(key(g))
+        b = bricks[g["i"]]
+        self.plate = plate; self.seen = [x["c"] for x in every if x is not b]      # for setting it down again
+        self._save(f"{tag}look.jpg", draw(f, bricks, plate, pick=g["i"]))
+        info = {"brick": b["colour"], "px": [round(v, 1) for v in b["c"]], "angle": round(b["angle"], 1), "xyz": [round(v, 4) for v in g["xyz"]],
+                "yaw": g["yaw"], "width_mm": round(g["width"] * 1000, 1), "clear_mm": round(g["clear"] * 1000, 1),
+                "n_bricks": len(bricks), "tilt_deg": round(math.degrees(g["tilt"]), 1)}
+        self.live = {"attempt": k + 1, "brick": b["colour"], "bricks": len(bricks)}
+        self.say(f"vision pick {k + 1}/{self.retries + 1}: {b['colour']} brick, {len(bricks)} on the plate")
+        p = np.array(g["xyz"]); yaw = g["yaw"]; g_open = min(A.fl["gripper"][1], max(g["open"], gmin + 200))
+        # 1. above the brick, jaws open; measured joints servoed onto the IK pose
+        q_hover, err = kin.ik.solve(np.array(g["q"]), p + [0, 0, HOVER], yaw, iters=60)
+        self._goto(q_hover, g_open, 1.0)
+        off = self._servo_in(q_hover, g_open)
+        z0 = kin.fk(self._q_now())[0][2] - (p[2] + HOVER)              # what "on target" reads at the hover
+        # 2. straight down in steps; stop early if the fingers stand on something (measured height stops following)
+        q = q_hover; n = 6; touched = None; z_low = p[2] - 0.004
+        for s in range(1, n + 1):
+            z = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
+            q, _ = kin.ik.solve(q, np.array([p[0], p[1], z]), yaw, iters=30)
+            self._goto(q, g_open, 0.45, off); time.sleep(0.08)
+            dz = kin.fk(self._q_now())[0][2] - z - z0
+            if dz > 0.005: touched = (z, dz); break
+        info["touch_mm"] = None if touched is None else [round((touched[0] - p[2]) * 1000, 1), round(touched[1] * 1000, 1)]
+        if touched and touched[0] - p[2] > 0.014:                        # stopped high: standing on the brick
+            C.goto(dict(A.cmd), 0.5, gripper=g_open); C.rise(C.wps("wp1")[0]["pos"])
+            return "landed", info
+        if touched:                                                      # on the plate: come up a little
+            q, _ = kin.ik.solve(q, np.array([p[0], p[1], touched[0] + touched[1] + 0.002]), yaw, iters=30)
+            self._goto(q, g_open, 0.3, off)
+        tcp = kin.fk(self._q_now())[0]; info["tcp_err_mm"] = [round(v * 1000, 1) for v in (tcp - p)]
+        info["tcp"] = [round(float(v), 4) for v in tcp]; self.z_rel = float(tcp[2] - p[2])   # height it is held at
+        # 3. close until the fingers stall, then squeeze a little past that width
+        self.grasp_pose = dict(A.cmd)
+        C.goto(dict(A.cmd), 0.3, gripper=gmin); time.sleep(0.15)
+        g_stall = A.pos["gripper"]; info["g_stall"] = round(g_stall)
+        if g_stall - gmin < 120:                                          # shut on nothing
+            C.goto(dict(A.cmd), 0.5, gripper=g_open); C.rise(C.wps("wp1")[0]["pos"])
+            return "empty", info
+        from collect import REGRIP_SQUEEZE
+        g_lock = max(gmin, g_stall - REGRIP_SQUEEZE)
+        C.goto(dict(A.cmd), 0.5, gripper=g_lock); time.sleep(0.15)
+        # 4. up, to waypoint 1, still held?
+        wp1t = C.wps("wp1")[0]["pos"]
+        C.rise(wp1t); C.goto(wp1t, gripper=g_lock); time.sleep(0.3)
+        info["g_lock"] = round(g_lock)
+        if not C.holding(): return "dropped", info
+        self.g_lock = g_lock
+        return "held", info
+
+    def place(self, u, v, yaw, g_lock):
+        """Set the held brick down so the grasp point is at pixel (u, v) of the top frame, jaws along yaw (either
+        flip), let go and come straight up. -> {"xyz", "yaw"} = FK of the MEASURED joints at the release: with the
+        brick's pixel in the next look this is one exact calibration pair (same IK, same sag handling as a pick)."""
+        A, C, kin = self.A, self.C, self.kin
+        gmin, gmax = A.fl["gripper"]
+        p = self.calib.xyz(u, v); p[2] += self.z_rel + 0.003
+        q, err, tilt, yaw, dyaw = kin.solve(kin.rad(C.wps("wp1")[0]["pos"]), p, yaw)
+        roll = kin.ticks(q, 0)["wrist_roll"]
+        if err > 0.004 or not A.fl["wrist_roll"][0] + 30 <= roll <= A.fl["wrist_roll"][1] - 30:
+            raise self.pol.PickFailed("the place pose is out of reach", retry=False)
+        q_h, _ = kin.ik.solve(q, p + [0, 0, HOVER], yaw, iters=60)
+        self._goto(q_h, g_lock, 1.0); off = self._servo_in(q_h, g_lock)
+        z0 = kin.fk(self._q_now())[0][2] - (p[2] + HOVER); n = 5; qd = q_h
+        for s_ in range(1, n + 1):
+            z = p[2] + HOVER * (1 - s_ / n)
+            qd, _ = kin.ik.solve(qd, np.array([p[0], p[1], z]), yaw, iters=30)
+            self._goto(qd, g_lock, 0.4, off); time.sleep(0.08)
+            if kin.fk(self._q_now())[0][2] - z - z0 > 0.004: break       # the brick stands on the plate
+        time.sleep(0.25)
+        tcp, got, _ = kin.fk(self._q_now())
+        g_open = min(gmax, max(A.pos["gripper"] + 330, gmin + 480))
+        C.goto(dict(A.cmd), 0.4, gripper=g_open); time.sleep(0.2)
+        x = np.array([math.cos(got), math.sin(got), 0.0])
+        q2, _ = kin.ik.solve(self._q_now()[:5], tcp - 0.006 * x, got, iters=30)       # fixed jaw off the brick's face
+        self._goto(q2, g_open, 0.3, off)
+        q3, _ = kin.ik.solve(q2, tcp - 0.006 * x + [0, 0, HOVER + 0.02], got, iters=40)
+        self._goto(q3, g_open, 0.7, off)
+        return {"xyz": [float(v) for v in tcp], "yaw": float(got), "target_px": [float(u), float(v)]}
+
+    def run(self):
+        A, C = self.A, self.C
+        home = C.wps("home")[0]["pos"]; gmin, gmax = A.fl["gripper"]
+        g_home = max(home["gripper"], gmin + 0.35 * (gmax - gmin)); reasons = []
+        t_run = time.time()
+        try:
+            for k in range(self.retries + 1):
+                self._check(); t0 = time.time()
+                self.say(f"vision pick {k + 1}/{self.retries + 1}: robot to the start pose, looking at the plate")
+                C.goto(home, gripper=g_home)
+                res, info = self.attempt(k, tag=f"a{k + 1}_")
+                self.attempts.append({"attempt": k + 1, "result": res, "t_s": round(time.time() - t0, 2), **info})
+                if res == "held":
+                    return self.g_lock, self.info(True, t_run)
+                reasons.append({"landed": "the fingers came down on the brick", "empty": "closed on nothing",
+                                "dropped": "lost it on the way to waypoint 1", "unreachable": "no reachable grasp"}[res])
+                if k < self.retries:
+                    self.say(f"vision pick {k + 1} failed ({reasons[-1]}): trying again", False)
+                    C.goto(dict(A.cmd), 0.4, gripper=g_home)
+            raise self.pol.PickFailed(f"vision pick failed {len(reasons)}x: {'; '.join(reasons)}", self.info(False, t_run))
+        except self.pol.PickFailed as e:
+            if not e.info: e.info = self.info(False, t_run, str(e))
+            raise
+        except self.pol.Stopped:
+            raise
+        except Exception as e:
+            raise self.pol.PickFailed(f"vision pick stopped: {e}", self.info(False, t_run, str(e)), retry=False) from e
+        finally:
+            try: C.hold_here()
+            except Exception: pass
+
+    def info(self, ok, t0, error=None):
+        return {"ok": ok, "error": error, "mode": "vision", "attempts": self.attempts, "n_attempts": len(self.attempts),
+                "t_s": round(time.time() - t0, 2), "calib": {k: self.calib.d.get(k) for k in ("source", "n", "res_mm_med", "fitted")}}
+
+
+PAIRS = HERE / "vpick_pairs.jsonl"     # one line per brick the robot set down and then saw: {"px", "xyz", ...}
+
+
+def add_pair(px, xyz, **extra):
+    with open(PAIRS, "a") as f: f.write(json.dumps({"px": list(px), "xyz": list(xyz), "t": time.strftime("%F %T"), **extra}) + "\n")
+
+
+def refit(calib, min_robot=10):
+    """Refit pixel -> table from the bricks the robot itself set down (exact pairs). The teleop pairs are kept only
+    until there are min_robot of those: human grasps are off-centre by several mm and use other wrist angles.
+    The grasp height plane is left as it is. -> (new Calib or None, text)"""
+    try: rob = [json.loads(l) for l in PAIRS.read_text().splitlines() if l.strip()]
+    except Exception: rob = []
+    if len(rob) < 4: return None, f"{len(rob)} robot pairs: too few to refit"
+    demo = [x for x in calib.d.get("pairs", []) if x.get("src") == "demo"]
+    use = rob if len(rob) >= min_robot else rob * 3 + demo                # few robot pairs: they count 3x
+    d, res, inl = Calib.fit([x["px"] for x in use], [[*x["xyz"][:2], 0.0] for x in use])
+    rr = np.array([np.linalg.norm(Calib(dict(d, z=calib.d["z"])).xy(*x["px"]) - np.array(x["xyz"][:2])) for x in rob]) * 1000
+    new = dict(calib.d); new.update({"H": d["H"], "source": f"{len(rob)} robot placements" + ("" if len(rob) >= min_robot else f" + {len(demo)} teleop"),
+                                     "n": len(use), "res_mm_med": float(np.median(rr)), "fitted": time.strftime("%F %T")})
+    CALIB.write_text(json.dumps(new, indent=1))
+    return Calib(new), f"refit on {new['source']}: robot pairs fit to {np.median(rr):.1f} mm median, {rr.max():.1f} mm max"
+
+
+def grasp_frame(d, meta):
+    """Index of the frame where the human's fingers stalled on the brick (the last such stall before the hand-off:
+    earlier ones are the leader resting shut, or a first try that slipped)."""
+    lo = meta["follower_limits"]["gripper"][0]; h = min(meta["handoff_frame"], len(d["t"]) - 1)
+    t, g, c = d["t"], d["state"][:, 5], d["action"][:, 5]
+
+    def stalled(i):
+        w = (t > t[i] - 0.25) & (t <= t[i])
+        return g[w].max() - g[w].min() <= 4 and g[i] - lo > 150 and c[i] < g[i] - 10
+    i = h
+    while i > 8 and not stalled(i): i -= 1
+    if i <= 8: return None
+    while i > 8 and stalled(i - 1): i -= 1
+    return i
+
+
+def demo_pairs(kin, episodes=ROOT / "episodes"):
+    """(brick pixel in the first top frame, FK of the joints that held it) for every successful teleop pick."""
+    rows = []
+    for mp in sorted(Path(episodes).glob("*/*/meta.json")):
+        m = json.loads(mp.read_text())
+        if m.get("outcome") != "success" or "act_roi" not in m: continue
+        d = np.load(mp.parent / "data.npz"); i = grasp_frame(d, m)
+        img = cv2.imread(str(mp.parent / "top" / "000000.jpg"))
+        if i is None or img is None: continue
+        bricks, _ = detect(img, tuple(m["act_roi"]["top"]))
+        mine = [b for b in bricks if b["colour"] == m.get("brick")]
+        if len(mine) != 1: continue
+        b = mine[0]; q = kin.rad(d["state"][i]); xyz, yaw, tilt = kin.fk(q)
+        rows.append({"ep": f"{mp.parent.parent.name}/{mp.parent.name}", "brick": m["brick"], "px": b["c"], "angle": b["angle"],
+                     "size": b["size"], "xyz": xyz.tolist(), "yaw": yaw, "tilt": tilt, "ticks": d["state"][i].tolist(),
+                     "g_hold": float(d["state"][i][5])})
+    return rows
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--fit-demos", action="store_true"); ap.add_argument("--show", default=""); ap.add_argument("--out", default="")
+    a = ap.parse_args()
+    if a.show:
+        img = cv2.imread(a.show); bricks, plate = detect(img)
+        for b in bricks: print(b["colour"], [round(x) for x in b["c"]], f"angle {b['angle']:.0f}", [round(x) for x in b["size"]], f"{b['area_mm2']:.0f} mm2")
+        cv2.imwrite(a.out or "/dev/null", draw(img, bricks, plate))
+    if a.fit_demos:
+        kin = Kin(); rows = demo_pairs(kin)
+        d, res, inl = Calib.fit([r["px"] for r in rows], [r["xyz"] for r in rows])
+        print(f"{len(rows)} demos, {inl.sum()} inliers, residual median {np.median(res[inl]):.1f} mm, p90 {np.percentile(res[inl], 90):.1f} mm")
+        d.update({"source": "teleop demos", "n": int(inl.sum()), "res_mm_med": float(np.median(res[inl])), "fitted": time.strftime("%F %T"),
+                  "joint_map": kin.joint_map, "pairs": [{"px": r["px"], "xyz": r["xyz"], "src": "demo"} for r, ok in zip(rows, inl) if ok]})
+        CALIB.write_text(json.dumps(d, indent=1)); print("wrote", CALIB)

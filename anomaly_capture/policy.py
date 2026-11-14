@@ -50,7 +50,7 @@ import numpy as np
 
 import prep
 from arm import BLOCKED, BODY, JOINTS, MIRROR_VMAX, TICK_PER_DEG, Stopped
-from collect import FPS, TAIL_S, GraspDetector, HandoffDetector, LIFT_FRAC
+from collect import FPS, HOLD_GAP, HOLD_MIN_OPEN, HOLD_STILL, TAIL_S, GraspDetector, HandoffDetector, LIFT_FRAC
 from export_act import POLICY_CAMS, denormalize, normalize
 
 HERE = Path(__file__).resolve().parent
@@ -361,7 +361,7 @@ class ActPick:
         self.ex = Executor(policy, mode)
         self.check = check or (lambda: None); self.grasped = grasped or (lambda: False)
         self.say = say or (lambda m, ok=True: None); self.clock = clock or RealClock()
-        self.live = {}; self.attempts = []; self.all_infer, self.all_obs = [], []
+        self.live = {}; self.attempts = []; self.all_infer, self.all_obs = [], []; self.grasp_pose = None; self.trace = []
 
     def _check(self):
         self.check()
@@ -394,6 +394,7 @@ class ActPick:
         self.p.reset(); self.ex.reset()
         det = HandoffDetector(A.fl["gripper"], self.C.wps("wp1")[0]["pos"], float(self.C.cfg.get("lift_frac", LIFT_FRAC)))   # same rule as the demos
         t0 = clk.now(); i = 0; done_at = None; why = "timeout"
+        gmin = A.fl["gripper"][0]; gq = []; self.trace = []
         lag_since = None; late = 0; dts = []; last = t0
         A.vmax = MIRROR_VMAX * max(0.1, min(1.0, self.speed))
         while True:
@@ -406,9 +407,18 @@ class ActPick:
             lag_since = (lag_since or now) if lag > BLOCKED else None
             if lag_since and now - lag_since > BLOCK_S:
                 raise PickFailed(f"BLOCKED: the arm stays {lag / TICK_PER_DEG:.0f}° behind the policy's target: something is in the way", retry=False)
+            # The demos start with the leader's gripper resting shut, so the policy commands "closed" from the first
+            # step: fingers closing in the air (or stopped short of shut on nothing) look like "closed on a brick" to
+            # the lift rule, and the move from home reads as a lift (hand-off after ~1.8 s, 5/5 on 2026-11-14).
+            # So a hand-off also needs the fingers stalled on something: not moving, not shut, squeezed tighter
+            # than they are (the same test as the "still held at WP1" check).
+            g = A.pos["gripper"]; gq = [(tt, v) for tt, v in gq if now - tt < 0.25] + [(now, g)]
+            still = now - gq[0][0] > 0.2 and max(v for _, v in gq) - min(v for _, v in gq) <= HOLD_STILL
+            on_obj = still and g - gmin > HOLD_MIN_OPEN and A.goal["gripper"] < g - HOLD_GAP / 2
+            self.trace.append([t] + [float(A.pos[n]) for n in JOINTS] + [float(tgt[n]) for n in JOINTS])
             if done_at is None:
                 if self.grasped(): done_at, why = now, "manual"
-                elif det.update(now, A.pos, A.goal): done_at, why = now, ("grasp" if det.why == "auto" else det.why)
+                elif det.update(now, A.pos, A.goal) and on_obj: done_at, why = now, ("grasp" if det.why == "auto" else det.why)
             self.live = {"attempt": k + 1, "of": self.retries + 1, "t": round(t, 1), "steps": i + 1, **self.ex.stats()}
             if done_at is not None and now - done_at >= TAIL_S: break     # keep closing a little longer, as in the demos
             if done_at is None and t > self.max_s: break
@@ -436,7 +446,7 @@ class ActPick:
                 if why == "timeout":
                     reasons.append(f"no grasp within {self.max_s:.0f} s")
                 else:
-                    C.hold_here(); g_lock = A.cmd["gripper"]
+                    C.hold_here(); g_lock = A.cmd["gripper"]; self.grasp_pose = dict(A.cmd)   # where it was picked
                     self.say("hand-off: the robot lifts the object to waypoint 1")
                     C.rise(wp1); C.goto(wp1, gripper=g_lock); self.clock.sleep_until(self.clock.now() + 0.3)
                     if C.holding():

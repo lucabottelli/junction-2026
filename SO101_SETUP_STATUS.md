@@ -352,6 +352,13 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - `/` and `/collect` redirect to `/arm`. The old pages still exist at `/manual` and `/arm/routines` but aren't linked.
     - The backend takes a `routine=` parameter on the waypoint and test-run endpoints, so each slot is edited directly by name.
 
+18. **Code lives on GitHub for collaboration** (2026-11-14 ≈03:30): private repo `https://github.com/lucabottelli/junction-2026`, branch `main`.
+    - **In git:** code, notes, camera settings, taught waypoints, scripts and report images.
+    - **Not in git** (`.gitignore`): `training_images/` (390 MB and growing) and `episodes/` (GBs). Copy those separately, with rsync or a Hugging Face dataset.
+    - **Commits** use the GitHub no-reply email (repo-local git config).
+    - **On another computer:** `gh repo clone lucabottelli/junction-2026 ~/junction26`. Running the tool there needs Physical AI Studio and the station hardware. The station-specific serials and devices are at the top of `capture.py` and `arm.py`.
+    - **Teammates:** invite them under GitHub → Settings → Collaborators.
+
 ---
 
 ## 5. Issues and fixes log

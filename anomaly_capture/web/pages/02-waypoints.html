@@ -1,0 +1,41 @@
+<section class=page id=p-waypoints data-path="/waypoints" data-title="Teach the waypoints" data-nav="Waypoints" data-group=steps data-step=2
+ data-summary="Save the start pose and waypoint 1 with the leader; reset spots and photo poses are optional.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 2</b> of 7</div>
+  <h1>Teach the <em>waypoints</em></h1>
+  <p class=lead>The robot replays a few fixed poses around the pick it learns. You show it each pose once with the leader arm and save it.
+   Two are required; the rest are optional.</p>
+ </header>
+
+ <div class=kpis id=wp-kpis></div>
+
+ <div id=wp-call></div>
+
+ <div class=todo><div class=todo-h>What to do</div><ol id=wp-how>
+  <li><span><b>Turn on Mirror leader.</b> The follower copies the leader arm live.</span></li>
+  <li><span><b>Move the leader</b> into the pose described on the card below. For a pose that holds a brick, close the leader's gripper on it.</span></li>
+  <li><span><b>Save current pose</b> on that card. To fix it later, move again and press <b>Set</b>.</span></li>
+  <li><span><b>Check it with Go:</b> the follower drives there slowly. Go switches the arm to Hold, so turn Mirror back on before teaching the next pose.</span></li>
+ </ol></div>
+
+ <section class=sec>
+  <div class=sec-h><h2>The route</h2><p>what one episode does, in order. Filled dots are taught.</p></div>
+  <div class=wp-route id=wp-route></div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Required</h2><p>every episode uses these two</p><span class=r id=wp-req-n></span></div>
+  <div class=g2 id=wp-req></div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Reset spots</h2><p>optional · without them the block is put back where it was picked, turned randomly</p></div>
+  <div id=wp-opt></div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Photos <em>&amp;</em> re-grip</h2><p>optional · only used when switched on</p><span class=r id=wp-ph2-n></span></div>
+  <div id=wp-ph2-call></div>
+  <div class=g2 id=wp-ph2></div>
+ </section>
+</section>

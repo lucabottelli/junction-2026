@@ -1,0 +1,60 @@
+<section class=page id=p-stills data-path="/stills" data-title="Manual stills" data-nav="Manual stills" data-group=tools data-icon=cam
+ data-summary="Still photos of a brick lying on the plate, from all cameras, for the later top-camera check.">
+ <header class=ph>
+  <div class=eyebrow>Tools</div>
+  <h1>Manual <em>stills</em></h1>
+  <p class=lead>Still photos of a brick lying on the plate, from every camera at once, for the later top-camera check of the upward face (phase 5).
+   Each capture averages several frames and saves the full frame plus a crop of the detected brick.</p>
+ </header>
+
+ <div class=todo><div class=todo-h>What to do</div><ol>
+  <li><span><b>Clear the plate</b> of bricks and hands, then <b>capture the empty background</b>. Redo it whenever the light changes.</span></li>
+  <li><span><b>Type the block name</b> and put the brick on the plate.</span></li>
+  <li><span><b>Capture good</b> (no cross) or <b>defect</b>. Move and turn the brick between shots for variety.</span></li>
+  <li><span>A bad shot? <b>Undo last</b> removes the most recent capture.</span></li>
+ </ol></div>
+
+ <div class=split>
+  <div class=stack>
+   <div class=g3>
+    <figure class=fig><div class=feed><img id=st-top data-src="/snap/top" data-ms=400 alt=""><div class=nofeed>No signal</div></div>
+     <figcaption><b>Top</b><span class=r id=st-bg-top></span></figcaption></figure>
+    <figure class=fig><div class=feed><img id=st-front data-src="/snap/front" data-ms=400 alt=""><div class=nofeed>No signal</div></div>
+     <figcaption><b>Front</b><span class=r id=st-bg-front></span></figcaption></figure>
+    <figure class=fig><div class=feed><img id=st-wrist data-src="/snap/wrist" data-ms=400 alt=""><div class=nofeed>No signal</div></div>
+     <figcaption><b>Wrist</b><span class=r id=st-bg-wrist></span></figcaption></figure>
+   </div>
+   <section class=sec style="margin-top:36px">
+    <div class=sec-h><h2>Saved so far</h2><p>plate shots per camera</p></div>
+    <table><thead><tr><th>Camera</th><th>Good</th><th style="width:28%"></th><th>Defect</th><th style="width:28%"></th></tr></thead><tbody id=st-counts></tbody></table>
+   </section>
+   <section class=sec style="margin-top:36px">
+    <div class=sec-h><h2>Last captures</h2><p>this session</p></div>
+    <div class=st-recent id=st-recent></div>
+   </section>
+  </div>
+
+  <div class=stack>
+   <div class=card>
+    <div class=ch><h3>Capture</h3></div>
+    <div class=field><label for=st-brick>Block</label><input id=st-brick list=st-bricklist placeholder="e.g. red" autocomplete=off><datalist id=st-bricklist></datalist>
+     <div class=hint>Shared with Record picks. Same name for the same block.</div></div>
+    <button class="btn block" onclick="p('/background')"><svg class=i><use href="#i-image"/></svg>Capture empty background</button>
+    <div class=g2 style="gap:8px;margin-top:8px">
+     <button class="btn primary" onclick="stillSave('good')">Capture good</button>
+     <button class="btn danger" onclick="stillSave('defect')">Capture defect</button>
+    </div>
+    <button class="btn ghost block" style="margin-top:8px" onclick="p('/undo')"><svg class=i><use href="#i-undo"/></svg>Undo last</button>
+    <div class=st-msg id=st-msg></div>
+   </div>
+   <div class="card flat">
+    <div class=ch><h3>Good to know</h3></div>
+    <ul class=clean>
+     <li>The background must be <b>empty</b>, otherwise the brick becomes part of the table and is never detected.</li>
+     <li>Every live camera is captured, even when no brick is found; problems are only noted.</li>
+     <li>The in-hand photos for the anomaly model come from <a href="/record">Record picks</a> at WP2, not from here.</li>
+    </ul>
+   </div>
+  </div>
+ </div>
+</section>

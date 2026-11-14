@@ -1,0 +1,19 @@
+/* Overview: "continue where you left off" card. Rows and KPIs come from style.css. */
+#p-overview .nextup{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:28px;padding:28px 32px;margin:0 0 40px;
+ background:var(--surface);border:1px solid var(--line);border-radius:var(--r);color:inherit;text-decoration:none;transition:border-color .15s}
+#p-overview .nextup:hover{border-color:var(--acc-line)}
+#p-overview .nextup .n{font:400 76px/.9 var(--serif);color:var(--acc);min-width:56px;text-align:center}
+#p-overview .nextup .n svg.i{width:44px;height:44px;stroke-width:1.2}
+#p-overview .nextup .k{font-size:11px;font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:var(--ink3)}
+#p-overview .nextup .t{font:400 34px/1.1 var(--serif);letter-spacing:-.01em;color:var(--ink);margin-top:8px}
+#p-overview .nextup .s{font-size:14px;color:var(--ink2);margin-top:8px;max-width:62ch;line-height:1.55}
+#p-overview .nextup .note{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink3);margin-top:12px}
+#p-overview .nextup.rec{border-color:color-mix(in srgb,var(--rec) 35%,transparent)}
+#p-overview .nextup.rec .n{color:var(--rec)}
+#p-overview .journey.later .jrow .n{display:grid;place-items:center}
+#p-overview .journey.later .jrow .n svg.i{width:20px;height:20px;color:var(--ink3)}
+@media (max-width:900px){
+ #p-overview .nextup{grid-template-columns:1fr;gap:14px;padding:22px}
+ #p-overview .nextup .n{text-align:left;font-size:56px}
+ #p-overview .nextup .t{font-size:28px}
+}

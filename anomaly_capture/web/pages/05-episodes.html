@@ -1,0 +1,32 @@
+<section class=page id=p-episodes data-path="/episodes" data-title="Review episodes" data-nav="Episodes" data-group=steps data-step=5
+ data-summary="Look through the recorded picks and switch off any you don't want the model to learn from.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 5</b> of 7<span id=ep-demo></span></div>
+  <h1>Review <em>episodes</em></h1>
+  <p class=lead>Every pick is stored raw, exactly as recorded. ACT copies whatever it sees, so before training take a minute to switch off the picks you would not want it to imitate.</p>
+ </header>
+
+ <div class=todo><div class=todo-h>What to do</div><ol>
+  <li><span><b>Skim each session</b> below: outcome, pick time and grasp attempts. Open a session to see its picks.</span></li>
+  <li><span><b>Switch off Use</b> on anything odd: a hesitant or wandering approach, a knocked block, a grip you would not repeat.</span></li>
+  <li><span><b>Failed, missed and discarded picks are never used</b>; there is nothing to do for them. Then continue to <a href="/train">Train ACT</a>.</span></li>
+ </ol></div>
+
+ <div class=kpis id=ep-kpis></div>
+
+ <section class=sec>
+  <div class=sec-h><h2>Per block</h2><p>Usable picks toward 30 with the block alone, 50 in total with distractors.</p></div>
+  <div class=ep-blocks id=ep-blocks></div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Sessions</h2><p id=ep-sess-note>Newest first.</p>
+   <span class=r><button class="btn sm ghost" onclick="epFold(true)">Expand all</button><button class="btn sm ghost" onclick="epFold(false)">Collapse all</button></span></div>
+  <div id=ep-sessions></div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Last saved images</h2><p>WP2 photos and manual stills from this server run, newest first.</p></div>
+  <div class=ep-recent id=ep-recent></div>
+ </section>
+</section>

@@ -54,7 +54,7 @@ class Collector:
                     "act_roi": {k: prep.default_act_roi(k) for k in REC_CAMS}}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
-        self.state, self.msg, self.ok = "idle", "set up the 3 routines on /arm, then START", True
+        self.state, self.msg, self.ok = "idle", "ready: name the block and press Start", True
         self.info = {}
         self.active = False; self.stop_flag = threading.Event()
         self.flags = {"grasped": False, "discard": False, "skip": False, "next": threading.Event()}
@@ -452,7 +452,7 @@ def make_router(S, A, ctx, DATA, ROOT):
                 "export_running": export["proc"] is not None, "export_log": export["log"][-4000:]}
 
     @r.get("/collect")
-    def page(): return RedirectResponse("/arm#collect")      # everything lives on /arm now (ui.py)
+    def page(): return RedirectResponse("/record")      # the UI lives at / now (ui.py, web/)
 
     @r.get("/collect/counts")
     def counts():
@@ -539,11 +539,14 @@ def make_router(S, A, ctx, DATA, ROOT):
         return status()
 
     @r.get("/collect/view/{cam}")
-    def view(cam: str):
-        """Exactly what the policy sees (top/wrist) - or, for front, the depth-masked in-hand view."""
+    def view(cam: str, full: bool = False):
+        """Exactly what the policy sees (top/wrist) - or, for front, the depth-masked in-hand view.
+        full=true: the whole clean frame (no crop, no overlays), used by the crop editor on /arm."""
         f = S.frames.get(cam)
         if f is None: return Response(status_code=204)
-        if cam == "front" and getattr(S.cams.get("front"), "depth", None) is not None:
+        if full:
+            img = cv2.resize(f, (960, 960 * f.shape[0] // f.shape[1]), interpolation=cv2.INTER_AREA)
+        elif cam == "front" and getattr(S.cams.get("front"), "depth", None) is not None:
             m, _ = prep.inhand_mask(S.cams["front"].depth)
             img = prep.apply_mask(f, m) if m is not None else f
             img = cv2.resize(img, (640, 360), interpolation=cv2.INTER_AREA)

@@ -1,0 +1,67 @@
+<section class=page id=p-connect data-path="/connect" data-title="Connect arm &amp; cameras" data-nav="Connect" data-group=steps data-step=1
+ data-summary="Free the cameras from Studio, check the three feeds and connect the follower arm.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 1</b> of 7</div>
+  <h1>Connect the arm <em>and cameras</em></h1>
+  <p class=lead>Three cameras watch the table: <b>top</b> looks down on the orange plate, <b>front</b> sees the brick in the gripper, <b>wrist</b> rides on the arm.
+   You move the leader arm by hand; the follower copies it. This page gets all of them talking to the capture server.</p>
+ </header>
+
+ <div class=todo><div class=todo-h>What to do</div><ol>
+  <li><span><b>Close Studio's Environment view.</b> The cameras and arms can only be used by one program at a time. Keep Studio's backend running, it is needed for training.</span></li>
+  <li><span><b>Check that the three feeds below are live.</b> Each caption says <i>live</i>, <i>frozen</i> or <i>offline</i>.</span></li>
+  <li><span><b>Connect the follower arm</b>, then put the leader roughly in the follower's pose.</span></li>
+  <li><span><b>Choose Mirror leader</b> and move the leader gently. The follower creeps until it has caught up, then follows.</span></li>
+ </ol></div>
+
+ <div class=split>
+  <div class=stack>
+   <div class=cn-feeds>
+    <figure class="fig wide"><div class=feed><img id=c-top data-src="/snap/top" data-ms=250 alt=""><div class=nofeed>No signal</div></div>
+     <figcaption><b>Top</b><span>plate, from above</span><span class=r id=age-top></span></figcaption></figure>
+    <figure class=fig><div class=feed><img id=c-front data-src="/snap/front" data-ms=250 alt=""><div class=nofeed>No signal</div></div>
+     <figcaption><b>Front</b><span>depth + colour</span><span class=r id=age-front></span></figcaption></figure>
+    <figure class=fig><div class=feed><img id=c-wrist data-src="/snap/wrist" data-ms=250 alt=""><div class=nofeed>No signal</div></div>
+     <figcaption><b>Wrist</b><span>on the gripper</span><span class=r id=age-wrist></span></figcaption></figure>
+   </div>
+   <div class=card>
+    <div class=ch><h3>Follower joints</h3><span class="r small muted">raw servo ticks · 0 – 4095</span></div>
+    <div class=jt id=jt></div>
+   </div>
+  </div>
+
+  <div class=stack>
+   <div class=card id=cn-arm>
+    <div class=ch><h3>Follower arm</h3><span class=r><span class=badge id=armbadge>—</span></span></div>
+    <div class=armstate id=cn-state>Not connected</div>
+    <div id=connbox>
+     <p class=sub>Connect the follower, then let it copy the leader.</p>
+     <button class="btn primary lg block" onclick="p('/arm/connect')"><svg class=i><use href="#i-plug"/></svg>Connect arm</button>
+    </div>
+    <div id=modebox hidden>
+     <div class=field><label>Mode</label>
+      <div class="seg full" id=modeseg>
+       <button data-m=mirror onclick="setMode('mirror')">Mirror leader</button>
+       <button data-m=hold onclick="setMode('hold')">Hold</button>
+       <button data-m=limp onclick="setMode('limp')">Limp</button></div>
+      <div class=hint id=modehint></div></div>
+    </div>
+   </div>
+
+   <div class=card>
+    <div class=ch><h3>Ready for the next step</h3></div>
+    <div id=cn-check></div>
+   </div>
+
+   <div class="card flat">
+    <div class=ch><h3>Good to know</h3></div>
+    <ul class=clean>
+     <li><b>Mirror</b> creeps at about 22°/s until the follower has caught up, so put the leader roughly in the follower's pose first.</li>
+     <li><b>Hold</b> keeps the follower stiff where it is. <b>Limp</b> turns torque off: the arm drops.</li>
+     <li><b>Space</b> or <b>Esc</b>, anywhere in this app, freezes the arm.</li>
+     <li>No camera feed or no arm after a replug? Run <code>sudo setfacl -m u:intel:rw /dev/ttyACM*</code>.</li>
+    </ul>
+   </div>
+  </div>
+ </div>
+</section>

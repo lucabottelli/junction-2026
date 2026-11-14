@@ -425,6 +425,60 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - The shape is roughly convex (deep hollows can hide a cross).
       - The object can be gripped again after a 90° turn. A triangular prism gripped on two slanted faces may squeeze out; the cycle then stops with "re-grip failed".
 
+20. **A simulated twin of the station generates pick demos for ACT; training mixes sim and real** (2026-11-14 ≈04:00, the user's decision). Code: `~/junction26/sim/`. Plan: `~/.claude/plans/dreamy-beaming-bear.md`.
+    - **Why:**
+      - Real demos cost a human teleoperating each pick; sim gives thousands of auto-labelled picks.
+      - The user chose **sim + real mix**, because a policy trained only on rendered images usually fails on real cameras (and our top camera is noisy at max gain).
+      - The sim task is **phase 1 only:** pick a brick lying anywhere on the orange plate → WP1, the same episode as the real data.
+    - **Stack:** `physicalai-mujoco-plugin` 0.5.0 (added to Studio's backend with `uv add`; mujoco 3.17, nothing downgraded). It provides the SO-101 twin (same joint names) and the composer. Our own scene sits on top of it, plus the plugin's `ArmIK` (damped least-squares, fingers down, jaw yaw).
+    - **Files:**
+      - `station.py`: scene (table, 3 plates as dishes with rims, Duplo red 2×4 / green 2×2 / blue 2×2 *(assumed; check)*, top camera, wrist camera) and the units mapping.
+      - `calib.py` + `overlay.py`: fit to the real station; they write `calibration.json` and `calib/overlay_*.jpg`.
+      - `expert.py`: scripted pick → WP1.
+      - `generate.py`: randomized episodes in the **same raw format** as `episodes/`, written to `episodes_sim/`.
+    - **Units:**
+      - Real ticks → sim rad: `(ticks − calibrated midpoint) × 2π/4096`. This is the real driver's degree convention; zero is at the range midpoint.
+      - Gripper: same servo slope, anchored so that 1979 ticks (real, holding a 31.7 mm brick) = 0.14 rad (sim, holding it).
+      - Checked by FK: `wp1` lands 18 cm in front, 14 cm left, fingers 6° from vertical, above the orange plate.
+    - **Top camera fit:**
+      - Keypoints are the gripper at grasp/WP1 frames and the base, read off the real top frames. Height comes from the measured scale (≈0.68 m). The fit is top-down: xc 0.233, yc −0.086, yaw −11.6°.
+      - The arm overlays the real one to about 10–25 px (2–5 cm); randomization covers the rest.
+      - **Precise calibration still needs a session with the real arm:** keypoints spread over the whole table.
+    - **Wrist camera:** placed behind the jaws (gripper frame (0.022, −0.05, −0.05), tilted 26° toward the fingers, fovy 72°), so both jaws show at the bottom, as on the real camera.
+    - **Expert:**
+      - Grasp across the brick's narrowest horizontal side. Choose the jaw flip that is reachable and upright with the smallest wrist turn.
+      - Motion: min-jerk joint move home → above the brick, correct a deliberate approach error, descend, squeeze past the brick, lift, carry to WP1.
+      - Randomized speed, hover height and pauses.
+      - **97% success** (29/30) without rendering.
+    - **Domain randomization:**
+      - 1–3 bricks; pose anywhere on the plate; 45% studs up, otherwise any face up.
+      - Colour shades, light position and intensity.
+      - Arm recoloured to the real white, jaws dark red.
+      - Top camera ±7 mm / ±1°; wrist camera ±3 mm / ±3° / ±3° FOV.
+      - **Real backgrounds composited in** via segmentation: sim table pixels in the top view are replaced by real top frames (sim shadows kept), and empty-sky pixels in the wrist view by real wrist frames.
+      - Per-camera look: top noisy at max gain and bluish; wrist dark, warm and vignetted.
+    - **Export:** `export_act.py --sim-episodes ~/junction26/episodes_sim [--sim-max N] [--real-repeat K]`. Sim episodes skip the human-demo cleaning; `--real-repeat` up-weights the few real demos.
+    - **Speed:** about 18 episodes/min with 12 workers (CPU-bound), about 28 MB per episode.
+
+21. **The control site was redesigned: dark, minimal, one page per step, served at `/`** (2026-11-14 ≈04:30, the user's request; this replaces Decision 17's "one long page on /arm").
+    - **Look:**
+      - A single near-black theme: background `#0A0A0A`, ink `#EDEBE6`, one champagne accent `#CBB68C` and a refined red for STOP/REC. There is no light theme.
+      - Instrument Serif for titles and big numbers, Inter for body text. Both are self-hosted in `anomaly_capture/web/static/fonts/`, so no internet is needed.
+    - **Pages:**
+      - Overview: the journey at a glance plus "continue where you left off".
+      - `/` `/connect` `/waypoints` `/crop` `/record` `/episodes` `/train` `/anomaly`: steps 1–7, each with "What to do" and previous/next links.
+      - `/later/target|decide|sort|faces|autonomous|measure`: the future phases, one page each.
+      - `/stills`: the manual still photos.
+      - `/arm` and `/collect` redirect, and old `#hash` links are mapped to the new paths. `/manual` (the old capture page) is unchanged.
+    - **Code layout:**
+      - `anomaly_capture/web/` holds `shell.html`, `style.css` and `js/core.js`. Core does routing, polling, the top bar, STOP and the keys.
+      - Each page has its own `pages/NN-slug.html`, `js/<slug>.js` and `css/<slug>.css`. A page's JS registers hooks in `PAGE.<slug>`, and an error in one page can't break the others.
+      - `ui.py` assembles everything from disk on every request, so editing a page needs only a browser reload. A server restart is needed only when a page path is added.
+      - The contract is in `web/DESIGN.md`.
+    - **Demo previews:** `/record?demo=<state>` and `?demo=1` on Episodes, Train and Anomaly render sample data and send nothing.
+    - **No API behaviour changed.** Built by 5 parallel agents (foundation + 4 page groups), which sent only GET requests and moved nothing. The buttons were not click-tested on the robot.
+    - **Noticed while building:** the live **wrist** view shows the room and people at the top of the image. The ACT policy can therefore still see background movement through the wrist camera. Consider masking or cropping the top of the wrist image (in `prep.py`, so training and runtime use the same image).
+
 ---
 
 ## 5. Issues and fixes log
@@ -535,3 +589,23 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 | Model | Device | Precision | Latency per step | Cycle time | Power | Temperature | Notes |
 |---|---|---|---|---|---|---|---|
 | | | | | | | | |
+
+---
+
+## 10. Research: open-source libraries for moving, turning and re-gripping bricks (2026-11-14)
+
+The question: which libraries help the follower turn a brick and grip it again so the hidden faces show (phase 5, issue 12).
+**No open-source library does "re-grip to show hidden faces" on an SO-101.** Regrasp planners (WRS, ReorientBot, MoveIt Grasps) are built for 6–7-DOF arms with full 3D object models.
+Libraries can supply the building blocks. The sequence itself (set the brick down, turn the wrist 90°, grip again, show the 2 faces that were under the fingers) stays our own scripted routine.
+
+| Need | Library | Status on this PC | Verdict |
+|---|---|---|---|
+| Cartesian moves: straight-down set-down, exact place height, wrist roll matched to the brick angle | **LeRobot `RobotKinematics`** (`lerobot/model/kinematics.py`, wraps **placo**) + Studio's `so101_follower.urdf` (in `physicalai-so101-plugin/urdf/`) | lerobot 0.6.0 is installed. placo 0.11.0 isn't yet, but a dry run shows it installs cleanly into Studio's venv (adds 17 packages, nothing downgraded) | **Use first.** It turns "teach every pose by hand" into "go to x,y,z with roll θ". That fixes the most likely causes of issue 12 (place height, the brick not centred under the fingers) |
+| Debug the re-grip without risking the real arm | **physicalai-mujoco-plugin**: SO-101 digital twin from MuJoCo Menagerie, same joint names and units as the real driver, cube scenes, object dragging | Already in Studio's plugin tree | **Use second.** Rehearse set-down → turn → re-grip in simulation, then replay on the real arm |
+| Camera ↔ robot-base calibration, so top-camera pixels become arm x,y | **OpenCV** `minAreaRect` (already used), D415 depth for z, **pupil-apriltags** for a tag on the table, OpenCV `calibrateHandEye` | OpenCV is installed. pupil-apriltags installs cleanly | Needed only if the robot picks at camera-chosen spots instead of taught ones |
+| Alternatives to placo for IK | **ikpy** (simple position IK), **robokin** (SO-101 wrapper: placo / PyRoki / Viser), **PyRoki** (JAX), **mink** (MuJoCo) | ikpy installs cleanly | Fallbacks only |
+| Collision-aware motion planning | **MPlib** (pip, no ROS), MoveIt 2 (ROS) | MPlib would **downgrade numpy and scipy** in Studio's venv, so it would need its own venv | Not needed. The table is open, so taught via-points are enough |
+| Flipping against a fixed edge (pivoting) | Research code only (Stanford TML extrinsic manipulation; Yang et al. 2023) | n/a | Not a library. The idea is useful, though: a fixed corner or L-stop on the tape spot makes the set-down repeatable |
+| Learning the re-grip instead of scripting it | ACT / SmolVLA in Studio (teleoperated demos of the re-grip) | In place | Possible later. A scripted re-grip with IK is faster to get working |
+
+**5-DOF limit:** the arm has no independent yaw at the wrist, so it can't reach every orientation. Re-gripping after a 90° turn of the wrist roll about the vertical axis is still possible. That swaps which pair of faces the fingers cover, which is exactly what phase 5 needs.

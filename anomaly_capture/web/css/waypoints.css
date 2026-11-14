@@ -1,0 +1,95 @@
+/* Step 2: Teach the waypoints. Everything scoped under #p-waypoints, tokens only. */
+#p-waypoints .kpis{margin-bottom:28px}
+#p-waypoints .kpi .pbar{margin-top:14px;max-width:180px}
+#p-waypoints .kpi .v.wp-off{font-style:italic}
+#p-waypoints .sec-h h2 em{font-style:italic;color:var(--ink3)}
+#p-waypoints .wp-st{margin-left:6px;vertical-align:1px}
+#p-waypoints .wp-st svg.i{width:11px;height:11px}
+#p-waypoints #wp-call:not(:empty){margin:0 0 28px}
+
+/* ---------- route diagram: two rows of dots on hairlines ---------- */
+#p-waypoints .wp-route{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+#p-waypoints .rt-row{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:26px 0 22px;align-items:start}
+#p-waypoints .rt-row+.rt-row{border-top:1px solid var(--line)}
+#p-waypoints .rt-k{font:600 11px/1.9 var(--sans);letter-spacing:.15em;text-transform:uppercase;color:var(--ink3)}
+#p-waypoints .rt-k span{display:block;font:400 12.5px/1.5 var(--sans);letter-spacing:0;text-transform:none;color:var(--ink4);margin-top:2px}
+#p-waypoints .rt-line{display:flex;align-items:flex-start;min-width:0}
+#p-waypoints .rt-n{flex:0 0 auto;width:96px;display:flex;flex-direction:column;align-items:center;gap:7px;text-align:center;
+ background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;cursor:pointer}
+#p-waypoints div.rt-n{cursor:default}
+#p-waypoints .rt-t{font-size:13px;font-weight:500;color:var(--ink);line-height:1.25;transition:color .12s}
+#p-waypoints .rt-s{font-size:11.5px;color:var(--ink3);line-height:1.35;max-width:100%}
+#p-waypoints .rt-s code{font-size:11px;padding:0 4px;background:transparent;color:var(--ink3)}
+#p-waypoints button.rt-n:hover .rt-t{color:var(--acc)}
+#p-waypoints button.rt-n:hover .rt-dot{border-color:var(--acc)}
+#p-waypoints .rt-n.auto .rt-t{font-style:italic;font-weight:400;color:var(--ink2)}
+#p-waypoints .rt-n.dim{opacity:.38}
+#p-waypoints .rt-l{flex:1 1 auto;min-width:18px;height:1px;background:var(--line2);margin-top:7px;position:relative}
+#p-waypoints .rt-l.dim{background:var(--line)}
+#p-waypoints .rt-l i{position:absolute;left:50%;top:-17px;transform:translateX(-50%);font:italic 400 13px/1 var(--serif);color:var(--ink3);white-space:nowrap}
+#p-waypoints .rt-l.dim i{color:var(--ink4)}
+#p-waypoints .rt-row.off .rt-line{opacity:.9}
+
+/* the dot (shared by the diagram and the card heads) */
+#p-waypoints .rt-dot{width:15px;height:15px;border-radius:50%;flex:none;border:1px solid var(--ink4);background:var(--bg);box-sizing:border-box;position:relative;transition:border-color .12s}
+#p-waypoints .rt-dot.on{background:var(--acc);border-color:var(--acc)}
+#p-waypoints .rt-dot.auto{border-style:dashed;border-color:var(--ink3)}
+#p-waypoints .rt-n.cam .rt-dot.on:after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--bg)}
+
+/* ---------- slot cards ---------- */
+#p-waypoints .wps{display:flex;flex-direction:column;gap:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:22px 24px;min-width:0;
+ transition:border-color .4s}
+#p-waypoints .wps.empty{background:transparent;border-style:dashed;border-color:var(--line2)}
+#p-waypoints .wps.flash{border-color:var(--acc-line)}
+#p-waypoints .wps-h{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
+#p-waypoints .wps-h h3{margin:0;font:400 23px/1.15 var(--serif);letter-spacing:-.005em;color:var(--ink)}
+#p-waypoints .wps-h code{font-size:11.5px}
+#p-waypoints .wps-h .r{margin-left:auto}
+#p-waypoints .wps-h .badge svg.i{width:11px;height:11px}
+#p-waypoints .wps-d{margin:0;font-size:13.5px;line-height:1.55;color:var(--ink2);max-width:62ch}
+#p-waypoints .wps-how{margin:0;display:grid;grid-template-columns:50px minmax(0,1fr);gap:10px;font-size:13px;line-height:1.55;color:var(--ink3);
+ padding:12px 0 0;border-top:1px solid var(--line)}
+#p-waypoints .wps-how span{font:600 10.5px/2 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--ink4)}
+#p-waypoints .wps-pose{display:flex;flex-direction:column;gap:12px}
+#p-waypoints .wps-j{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));margin:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+#p-waypoints .wps-j>div{padding:10px 0 10px 12px;min-width:0}
+#p-waypoints .wps-j>div:first-child{padding-left:0}
+#p-waypoints .wps-j>div+div{border-left:1px solid var(--line)}
+#p-waypoints .wps-j dt{font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink4)}
+#p-waypoints .wps-j dd{margin:4px 0 0;font:400 13px/1.2 var(--mono);color:var(--ink2)}
+#p-waypoints .wps-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:auto}
+#p-waypoints .wps-acts{display:flex;gap:6px;margin-left:auto}
+#p-waypoints .wps.empty .wps-foot{margin-top:auto;padding-top:2px}
+#p-waypoints .wps-here{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--acc)}
+#p-waypoints .wps-list{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+#p-waypoints .wps-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);min-width:0}
+#p-waypoints .wps-i{font:400 18px/1 var(--serif);color:var(--acc);width:20px}
+#p-waypoints .wps-nm{font:400 13px/1.2 var(--mono);color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#p-waypoints .wps-row .badge svg.i{width:12px;height:12px}
+#p-waypoints .wps-test{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--line)}
+#p-waypoints .wps-test span{font-size:12px;color:var(--ink3)}
+#p-waypoints .wps.multi .wps-foot{margin-top:0}
+#p-waypoints #wp-opt .wps{max-width:none}
+#p-waypoints #wp-ph2-call:not(:empty){margin-bottom:20px}
+#p-waypoints #wp-ph2.off .wps{opacity:.55;transition:opacity .2s}
+#p-waypoints #wp-ph2.off .wps:hover,#p-waypoints #wp-ph2.off .wps:focus-within{opacity:1}
+
+/* ---------- narrow ---------- */
+@media (max-width:1180px){
+ #p-waypoints .rt-row{grid-template-columns:1fr;gap:16px}
+ #p-waypoints .rt-line{overflow-x:auto;padding:18px 2px 4px}
+}
+@media (max-width:900px){
+ #p-waypoints .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+ #p-waypoints .kpi:nth-child(3){padding-left:0;border-left:0}
+ #p-waypoints .kpi:nth-child(n+3){border-top:1px solid var(--line)}
+ #p-waypoints .rt-line{flex-direction:column;align-items:stretch;overflow:visible;padding:0}
+ #p-waypoints .rt-n{width:auto;flex-direction:row;align-items:baseline;gap:10px;text-align:left}
+ #p-waypoints .rt-n .rt-dot{align-self:center}
+ #p-waypoints .rt-l{width:1px;min-width:0;height:auto;min-height:22px;margin:3px 0 3px 7px;flex:0 0 auto}
+ #p-waypoints .rt-l i{left:18px;top:50%;transform:translateY(-50%)}
+ #p-waypoints .wps-j{grid-template-columns:repeat(3,minmax(0,1fr))}
+ #p-waypoints .wps-j>div:nth-child(4){padding-left:0;border-left:0}
+ #p-waypoints .wps-j>div:nth-child(n+4){border-top:1px solid var(--line)}
+ #p-waypoints .wps-acts{margin-left:0}
+}

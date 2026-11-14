@@ -1,0 +1,40 @@
+/* Step 3: camera crop. Overlays sit on camera imagery (always dark), so they use fixed light/dark washes. */
+/* camera roles: three hairline-separated columns */
+#p-crop .cr-roles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:0 0 8px}
+#p-crop .cr-roles>div{padding:22px 24px 24px 0;display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+#p-crop .cr-roles>div+div{padding-left:24px;border-left:1px solid var(--line)}
+#p-crop .cr-roles .k{font-size:11px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)}
+#p-crop .cr-roles .t{font:400 24px/1.15 var(--serif);color:var(--ink)}
+#p-crop .cr-roles p{font-size:13px;line-height:1.5;color:var(--ink2);flex:1;max-width:36ch}
+#p-crop .cr-roles .badge{margin-top:6px}
+
+/* crop editor: the full top frame with the saved crop, the box being dragged and its 4:3 result */
+#p-crop .cr-editor{cursor:crosshair;user-select:none;-webkit-user-select:none;touch-action:none}
+#p-crop .cr-editor img{pointer-events:none;object-fit:fill}
+#p-crop .cr-editor .roi,#p-crop .cr-editor .drag,#p-crop .cr-editor .fit{position:absolute;pointer-events:none;z-index:1}
+#p-crop .cr-editor .roi{outline:1.5px solid var(--acc);box-shadow:0 0 0 9999px rgba(5,5,5,.58);transition:left .2s,top .2s,width .2s,height .2s}
+#p-crop .cr-editor .roi.pending{outline-style:dashed}
+#p-crop .cr-editor.drawing .roi{box-shadow:none;outline-color:var(--acc-line)}
+#p-crop .cr-editor .drag{outline:1px dashed rgba(255,255,255,.75)}
+#p-crop .cr-editor .fit{outline:1.5px solid var(--acc);box-shadow:0 0 0 9999px rgba(5,5,5,.45)}
+#p-crop .cr-editor .tag{position:absolute;left:0;top:-8px;transform:translateY(-100%);white-space:nowrap}
+#p-crop .cr-editor .roi .tag{top:8px;left:8px;transform:none}
+#p-crop .cr-editor .fit .tag{top:8px;left:8px;transform:none;color:var(--acc)}
+#p-crop .cr-editor .cr-hint{position:absolute;left:12px;bottom:12px;z-index:2;pointer-events:none;transition:opacity .15s}
+#p-crop .cr-editor .cr-hint svg.i{width:13px;height:13px}
+#p-crop .cr-editor.drawing .cr-hint,#p-crop .cr-editor:not(:has(img[data-ok="1"])) .cr-hint{opacity:0}
+#p-crop .cr-cap{min-height:20px}
+#p-crop .cr-cap b{color:var(--ink);font-weight:500}
+#p-crop .cr-cap svg.i{width:14px;height:14px}
+
+/* front camera: feed + checklist */
+#p-crop .cr-front{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:36px;align-items:start}
+#p-crop .cr-checks .check:first-child{padding-top:2px}
+#p-crop .cr-checks .check b{color:var(--ink);font-weight:500}
+#p-crop .cr-note{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+
+@media (max-width:1180px){#p-crop .cr-front{grid-template-columns:1fr;gap:20px}}
+@media (max-width:900px){
+ #p-crop .cr-roles{grid-template-columns:1fr}
+ #p-crop .cr-roles>div+div{padding-left:0;border-left:0;border-top:1px solid var(--line)}
+}

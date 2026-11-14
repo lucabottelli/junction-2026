@@ -1,0 +1,74 @@
+<section class=page id=p-train data-path="/train" data-title="Clean the demos &amp; train ACT" data-nav="Train ACT" data-group=steps data-step=6
+ data-summary="Clean the demonstrations, export them to Studio and train the ACT pick model on the Intel GPU.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 6</b> of 7<span id=tr-demo></span></div>
+  <h1>Clean the demos <em>&amp; train ACT</em></h1>
+  <p class=lead>A human teleoperator hesitates and fumbles, and ACT copies whatever it sees. The export keeps the best version of every pick, then writes a Studio dataset with the top and wrist cameras.</p>
+ </header>
+
+ <div class=todo><div class=todo-h>What to do</div><ol>
+  <li><span><b>Preview</b> first: the log lists which picks are kept, which are rejected and why.</span></li>
+  <li><span><b>Export to Studio</b> once the preview looks right. Raw episodes are never changed; re-export any time.</span></li>
+  <li><span><b>Train in Studio</b>: ACT on the Intel GPU, cameras top + wrist (below).</span></li>
+ </ol></div>
+
+ <section class=sec>
+  <div class=sec-h><h2>What the cleaning does</h2><p>Four passes over every raw pick, in this order.</p></div>
+  <ol class=tr-stages>
+   <li><span class=tr-n>01</span><b>Reject</b><p>Failed, missed, discarded or switched-off picks; fumbles with more grasp attempts than allowed; picks slower than 2.5× the median; camera stalls over 0.5 s.</p></li>
+   <li><span class=tr-n>02</span><b>Trim</b><p>The idle time before you start moving the leader.</p></li>
+   <li><span class=tr-n>03</span><b>Smooth</b><p>Hand tremor out of the joint targets (Gaussian, σ 1.5 frames). The gripper is left untouched.</p></li>
+   <li><span class=tr-n>04</span><b>Retime</b><p>Pauses shrink 10×, free-space motion is sped up, and no joint moves more than 6° per step.</p></li>
+  </ol>
+
+  <div class=tr-tl aria-label="One pick before and after cleaning">
+   <div class=tr-tlrow><span class=tr-tlk>Raw pick</span><div class=tr-bar id=tr-before></div><span class=tr-tlv id=tr-before-s></span></div>
+   <div class=tr-tlrow><span class=tr-tlk>Cleaned</span><div class=tr-bar id=tr-after></div><span class=tr-tlv id=tr-after-s></span></div>
+   <div class=tr-legend>
+    <span><i class="tr-sw idle"></i>Idle start, trimmed</span><span><i class="tr-sw move"></i>Free-space motion, sped up</span><span><i class="tr-sw pause"></i>Pause, 10× shorter</span>
+    <span><i class="tr-sw prec"></i>Precision zone: last 1 s before the grasp, kept 1:1</span><span><i class="tr-sw carry"></i>Robot's carry to WP1, kept as recorded</span>
+   </div>
+   <p class="small muted tr-foot">Illustration of a typical pick at the speed-up set below. Frames are <i>selected</i> from the real recording, so images and joint states stay genuine; the policy just learns to take bigger steps where the human dawdled.</p>
+  </div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Export</h2><span class=r id=tr-state></span></div>
+  <div class=split>
+   <div class=card>
+    <div class=field><label for=tr-br>Blocks</label><select id=tr-br><option value="">All blocks · one model for all</option></select>
+     <div class=hint>All blocks trains one model on every block (each pick keeps its own task text). One block gives one dataset, and later one model, per block.</div></div>
+    <div class=fields2>
+     <div class=field><label for=tr-name>Dataset name</label><input id=tr-name placeholder="pick-bricks-v1" autocomplete=off spellcheck=false><div class=hint title="pick-&lt;blocks&gt;-x&lt;count&gt;">Empty: named after the blocks and count</div></div>
+     <div class=field><label for=tr-sp>Speed-up</label><input id=tr-sp type=number value=1.5 step=0.1 min=1 max=3><div class=hint>Free-space motion only, 1–3×</div></div>
+     <div class=field><label for=tr-at>Max grasp attempts</label><input id=tr-at type=number value=1 min=1 max=5><div class=hint>Picks with more are rejected as fumbles</div></div>
+    </div>
+    <div class=tr-actions>
+     <button class=btn id=tr-dry onclick="trExport(true)"><svg class=i><use href="#i-eye"/></svg>Preview (dry run)</button>
+     <button class="btn primary" id=tr-go onclick="trExport(false)"><svg class=i><use href="#i-save"/></svg>Export to Studio</button>
+     <span class="small muted" id=tr-busy></span>
+    </div>
+   </div>
+   <div class=card>
+    <div class=ch><h3><svg class=i><use href="#i-list"/></svg>Going in</h3></div>
+    <div id=tr-sel></div>
+    <div id=tr-res></div>
+   </div>
+  </div>
+
+  <div class=tr-term>
+   <div class=tr-termh><span class=mono>export_act.py</span><span class=spacer></span><span id=tr-termst></span></div>
+   <pre id=tr-log></pre>
+  </div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Then, in Studio</h2><p id=tr-last></p>
+   <span class=r><a class="btn primary" href="http://localhost:3000" target=_blank rel=noopener>Open Studio<svg class="i arrow"><use href="#i-go"/></svg></a></span></div>
+  <ol class=tr-studio>
+   <li><b>Datasets</b><p>Open the exported dataset and play a few episodes to check they look right.</p></li>
+   <li><b>Train</b><p>Policy <b>ACT</b>, device <b>XPU</b> (local Intel GPU), cameras <b>top + wrist</b>.</p></li>
+   <li><b>Run it</b><p>Later, in phase 6: our own runtime runs the model with the same crops and hands over to the scripted carry.</p></li>
+  </ol>
+ </section>
+</section>

@@ -1,0 +1,39 @@
+<section class=page id=p-anomaly data-path="/anomaly" data-title="Anomaly data" data-nav="Anomaly data" data-group=steps data-step=7
+ data-summary="Front-camera photos of each brick held at WP2: at least 60 good and 10–20 defect per block.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 7</b> of 7<span id=an-demo></span></div>
+  <h1>Anomaly <em>data</em></h1>
+  <p class=lead>Front-camera photos of each block held in the gripper at waypoint 2. They are taken automatically during recording and later train one good / defect model per block.</p>
+ </header>
+
+ <div class="callout warn an-rule"><svg class=i><use href="#i-alert"/></svg><span><b>Capture all good data before drawing any cross.</b> The pen is permanent: once a block has a cross it can never give good images again.</span></div>
+
+ <div class=todo><div class=todo-h>What to do</div><ol>
+  <li><span><b>Switch on the WP2 photos</b> under <a href="/record">Record picks</a> → Options. <span id=an-ph2></span></span></li>
+  <li><span><b>Record every clean block with label Good</b> until it has at least 60 in-hand images.</span></li>
+  <li><span><b>Only then draw crosses</b> of different sizes and record 10–20 images per block with label Defect.</span></li>
+ </ol></div>
+
+ <div class=kpis id=an-kpis></div>
+
+ <section class=sec>
+  <div class=sec-h><h2>In-hand images per block</h2><p>Front camera at WP2 · target ≥ 60 good, 10–20 defect.</p></div>
+  <div class=an-blocks id=an-blocks></div>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Plate shots</h2><p>Optional manual stills of a block lying on the plate, for the later top-camera check.</p>
+   <span class=r><a class="btn sm" href="/stills">Manual stills<svg class="i arrow"><use href="#i-go"/></svg></a></span></div>
+  <table class=an-plate><thead><tr><th>Camera</th><th>Good</th><th class=an-barc></th><th>Defect</th><th class=an-barc></th></tr></thead><tbody id=an-plate></tbody></table>
+ </section>
+
+ <section class=sec>
+  <div class=sec-h><h2>Where the files live</h2><p>Relative to <span class=mono>~/junction26</span>.</p></div>
+  <dl class=an-files>
+   <div><dt><code>training_images/front/inhand/good/</code></dt><dd>In-hand photos of clean blocks.</dd></div>
+   <div><dt><code>training_images/front/inhand/defect/</code></dt><dd>In-hand photos of blocks with a cross.</dd></div>
+   <div><dt>Each photo, three files</dt><dd><span class=mono>.png</span> full-res original · <span class=mono>_depth.png</span> aligned depth · <span class=mono>_masked.jpg</span> depth-masked, the background turned flat grey.</dd></div>
+   <div><dt><code>training_images/&lt;top|front|wrist&gt;/&lt;good|defect&gt;/</code></dt><dd>Plate shots from the manual stills tool.</dd></div>
+  </dl>
+ </section>
+</section>

@@ -1,0 +1,47 @@
+/* Step 7: anomaly data */
+#p-anomaly .an-rule{margin:0 0 40px;max-width:84ch}
+#p-anomaly .an-rule b{color:var(--ink);font-weight:500}
+#p-anomaly .kpis{margin-bottom:0}
+
+#p-anomaly .an-empty{display:flex;gap:14px;align-items:flex-start;color:var(--ink3);font-size:13.5px}
+#p-anomaly .an-empty>svg.i{margin-top:2px}
+#p-anomaly .an-empty b{display:block;color:var(--ink);font-weight:500;margin-bottom:3px}
+
+/* per block */
+#p-anomaly .an-blocks{border-top:1px solid var(--line)}
+#p-anomaly .an-blocks>.card{margin-top:18px}
+#p-anomaly .an-blk{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1fr) 220px;gap:32px;align-items:center;padding:20px 0;border-bottom:1px solid var(--line)}
+#p-anomaly .an-bname{display:flex;align-items:center;gap:10px;font-size:15px}
+#p-anomaly .an-bname b{font-weight:500;color:var(--ink);text-transform:capitalize}
+#p-anomaly .an-lab{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;font-size:11px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)}
+#p-anomaly .an-num{font-size:12.5px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--ink3);font-variant-numeric:tabular-nums}
+#p-anomaly .an-num .serif{font:400 26px/1 var(--serif);color:var(--ink);margin-right:2px}
+#p-anomaly .an-st{text-align:right}
+
+#p-anomaly .an-track{position:relative;height:4px;border-radius:4px;background:var(--sunk);min-width:80px}
+#p-anomaly .an-track>i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--acc);transition:width .3s}
+#p-anomaly .an-track>i.ok{background:var(--ok)}
+#p-anomaly .an-tick{position:absolute;top:-4px;width:1px;height:12px;background:var(--ink3)}
+
+/* plate shots */
+#p-anomaly .an-plate{border-top:1px solid var(--line)}
+#p-anomaly .an-plate .an-barc{width:30%}
+#p-anomaly .an-plate th:nth-child(2),#p-anomaly .an-plate th:nth-child(4){width:12%}
+#p-anomaly .an-plate td{vertical-align:middle}
+
+/* files */
+#p-anomaly .an-files{margin:0;border-top:1px solid var(--line)}
+#p-anomaly .an-files>div{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:24px;padding:14px 0;border-bottom:1px solid var(--line);align-items:baseline}
+#p-anomaly .an-files dt{font-size:13px;color:var(--ink)}
+#p-anomaly .an-files dd{margin:0;font-size:13.5px;color:var(--ink2)}
+#p-anomaly .an-files code{font-size:12px}
+
+@media (max-width:1180px){
+ #p-anomaly .an-blk{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px 28px}
+ #p-anomaly .an-st{text-align:right}
+}
+@media (max-width:900px){
+ #p-anomaly .an-blk,#p-anomaly .an-files>div{grid-template-columns:1fr}
+ #p-anomaly .an-st{text-align:left}
+}
+#p-anomaly .an-blocks>.muted{padding-top:14px}

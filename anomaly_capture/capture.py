@@ -690,13 +690,13 @@ setInterval(()=>{if(!busy)fetch('/status').then(r=>r.json()).then(show)},400);
 
 @app.get("/manual")
 def index():
-    return HTMLResponse(PAGE)          # old manual-capture page (kept, not linked); the main page is /arm
+    return HTMLResponse(PAGE)          # old manual-capture page (kept, not linked); the main UI is / (ui.py)
 
 
 @app.get("/")
 def root():
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse("/arm")
+    import ui                          # the control UI (web/); ui.router serves every other page path too
+    return ui.serve()
 
 
 if __name__ == "__main__":
@@ -718,9 +718,7 @@ if __name__ == "__main__":
         app.include_router(crouter)
         import sorter
         app.include_router(sorter.make_router(S, ARM, ACTX, crouter.collector, DATA, ROOT))
-        print("inspect + sort (phases 3-5): section 'Inspect & sort' on http://127.0.0.1:7870/arm")
-        print("pick+inspect data collection: http://127.0.0.1:7870/collect")
-        print("arm auto-capture: http://127.0.0.1:7870/arm")
+        print("control UI: http://127.0.0.1:7870/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
     except Exception as e:
         print("arm module not loaded:", e)
     print("live cameras:", S.live)

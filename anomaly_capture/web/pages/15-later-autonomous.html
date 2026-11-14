@@ -1,0 +1,29 @@
+<section class=page id=p-later-autonomous data-path="/later/autonomous" data-title="Run autonomously" data-nav="Run autonomously" data-group=later data-phase="Phase 6" data-icon=loop
+ data-summary="Our own runtime chains ACT pick, scripted carry, anomaly decision and sort, brick after brick, with a safe stop.">
+ <header class=ph>
+  <div class=eyebrow><b>Phase 6</b> · Later <span class="badge line">Not built yet</span></div>
+  <h1>Run <em>autonomously</em></h1>
+  <p class=lead>The full loop without a human at the leader: pick a brick, carry it to WP2, decide, sort, next brick. It runs in our own runtime rather than Studio's,
+   because it has to use exactly the same image crops as the recordings and hand over between the learned and the scripted parts.</p>
+ </header>
+ <div class=later-grid>
+  <div class=prose>
+   <h2>The loop</h2>
+   <ol class=steps-list>
+    <li><span><b>ACT pick</b> with the same <code>prep.py</code> crops as during recording.</span></li>
+    <li><span><b>Grip detected</b> by the same stall-based hand-off as in collection, then switch to the scripted carry to WP2.</span></li>
+    <li><span><b>Anomaly inference</b> at WP2, then <b>sort</b> onto the good or defect plate.</span></li>
+    <li><span><b>Next brick.</b> STOP on this page (Space / Esc) freezes the arm at any moment.</span></li>
+   </ol>
+   <h2>Faster than the demos</h2>
+   <p>Optional: run ACT faster than real time with temporal ensembling or chunked execution. The demonstrations are already cleaned of hesitation and pauses at export.</p>
+  </div>
+  <aside class=later-aside>
+   <div class=k>Builds on</div>
+   <div class=check><span class="ic opt"></span><span><a href="/train">A trained ACT pick model</a></span></div>
+   <div class=check><span class="ic opt"></span><span><a href="/later/decide">Phase 3</a> and <a href="/later/sort">Phase 4</a></span></div>
+   <div class=k>To build</div>
+   <ul class=clean><li>Policy runtime with shared preprocessing</li><li>Hand-off into the scripted routines</li><li>Run page: live state, counts, safe stop</li></ul>
+  </aside>
+ </div>
+</section>

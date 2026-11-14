@@ -1,0 +1,33 @@
+<section class=page id=p-later-decide data-path="/later/decide" data-title="Good or defect at WP2" data-nav="Decide good / defect" data-group=later data-phase="Phase 3" data-icon=scan
+ data-summary="One PatchCore model per brick scores the masked WP2 photo; a threshold from the defect images decides.">
+ <header class=ph>
+  <div class=eyebrow><b>Phase 3</b> · Later <span class="badge line">Not built yet</span></div>
+  <h1>Decide: good or <em>defect</em></h1>
+  <p class=lead>With the brick held still in front of the front camera at WP2, an anomaly model scores the photo. A brick with a pen cross scores high; a clean brick scores low.
+   The smallest cross the model still catches is the number that matters most.</p>
+ </header>
+ <div class=later-grid>
+  <div class=prose>
+   <h2>How it will work</h2>
+   <ol class=steps-list>
+    <li><span><b>One PatchCore model per brick,</b> trained only on the depth-masked WP2 <i>good</i> images of that brick. The brick's colour selects the model.</span></li>
+    <li><span><b>Threshold from the defect images.</b> The 10–20 defect photos per brick set where good ends and defect begins; they are for evaluation and calibration only, never for training.</span></li>
+    <li><span><b>Measure the smallest cross detected,</b> drawing crosses from the smallest up.</span></li>
+    <li><span><b>Export to OpenVINO</b> and show the live score and heat-map on this page.</span></li>
+   </ol>
+   <h2>Why this way</h2>
+   <p>Holding the brick gives the same pose every time, close to the camera: well-aligned views for PatchCore and more pixels per millimetre for small crosses.
+    The gripper fingers look the same in every image, so they count as normal. The depth mask greys out people moving behind the brick.</p>
+   <p>Accuracy first, speed second: every change has to earn its place on a held-out test set.</p>
+  </div>
+  <aside class=later-aside>
+   <div class=k>Builds on</div>
+   <div class=check><span class="ic opt"></span><span><a href="/anomaly">Anomaly data</a>: ≥ 60 good and 10–20 defect per block</span></div>
+   <div class=check><span class="ic opt"></span><span><a href="/crop">Depth-masked front view</a> checked at WP2</span></div>
+   <div class=k>To build</div>
+   <ul class=clean><li>PatchCore training per brick (XPU)</li><li>Threshold + smallest-cross report</li><li>OpenVINO export, live score, heat-map</li></ul>
+   <div class=k>Watch out</div>
+   <p class="small muted">Capture all good data before drawing any cross: the pen is permanent.</p>
+  </aside>
+ </div>
+</section>

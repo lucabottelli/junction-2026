@@ -1,0 +1,16 @@
+/* Connect: arm state, joint readout */
+#p-connect .armstate{font:400 34px/1.05 var(--serif);letter-spacing:-.01em;color:var(--ink);margin:-2px 0 18px}
+#p-connect .armstate.ok{color:var(--acc)}#p-connect .armstate.warn{color:var(--warn)}
+#p-connect .jt{display:grid;gap:12px}
+#p-connect .jr{display:grid;grid-template-columns:120px minmax(0,1fr) 52px;gap:14px;align-items:center;font-size:13px}
+#p-connect .jr .k{color:var(--ink2)}
+#p-connect .jr .v{text-align:right;font-family:var(--mono);font-size:12.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+#p-connect .jr .trk{position:relative;height:4px;border-radius:4px;background:var(--sunk)}
+#p-connect .jr .trk:before{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--line2)}
+#p-connect .jr .trk>i{position:absolute;top:-4px;width:2px;height:12px;margin-left:-1px;border-radius:2px;background:var(--acc);transition:left .25s}
+#p-connect .fig figcaption span:not(.r):not(.dot){color:var(--ink3)}
+#p-connect .cn-feeds{display:grid;grid-template-columns:1fr 1fr;gap:24px 20px}
+#p-connect .cn-feeds .wide{grid-column:1/-1}
+#p-connect .fig figcaption{white-space:nowrap;min-width:0}
+#p-connect .fig figcaption>span:not(.r){overflow:hidden;text-overflow:ellipsis}
+@media (max-width:900px){#p-connect .cn-feeds{grid-template-columns:1fr}}

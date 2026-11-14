@@ -1,0 +1,84 @@
+<section class=page id=p-record data-path="/record" data-title="Record picks" data-nav="Record picks" data-group=steps data-step=4
+ data-summary="Pick each block with the leader, 30–50 times per block; the robot carries it to WP1 and puts it back.">
+ <header class=ph>
+  <div class=eyebrow><b>Step 4</b> of 7</div>
+  <h1>Record picks</h1>
+  <p class="lead rc-lead">Each episode: you pick the block once with the leader; the robot carries it to waypoint 1 by itself and puts it back for the next try.
+   Every episode is a demonstration the ACT pick model learns from.</p>
+ </header>
+
+ <!-- stage stepper: built by record.js (WP2 photos only appears when that option is on) -->
+ <ol class=rc-steps id=rc-steps aria-label="Stages of one episode"></ol>
+
+ <div class=rc-grid>
+  <div class=rc-main>
+   <!-- the cockpit: what is happening now, readable from the leader arm -->
+   <div class=rc-now id=rc-now aria-live=polite>
+    <div class=rc-eye><span class=rc-state id=rc-state><span class=dot></span><span id=rc-statetxt>Loading</span></span><span class=rc-count id=rc-count></span><span class=rc-rec id=rc-rec hidden><span class="dot rec"></span>REC<span id=rc-rect></span></span></div>
+    <h2 class=rc-head id=rc-head>Record picks</h2>
+    <div class=rc-who>
+     <div><div class=k>You</div><div class=t id=rc-you></div></div>
+     <div><div class=k>Robot</div><div class=t id=rc-robot></div></div>
+    </div>
+    <div class=rc-inst id=rc-inst></div>
+    <div class=rc-msg id=rc-msg></div>
+   </div>
+
+   <div class=rc-feeds>
+    <figure class=fig><div class="feed r43"><img id=k-top data-src="/collect/view/top" data-ms=300 alt=""><div class=nofeed>No signal</div><div class=tl><span class=ov>Top · policy crop</span></div><div class=tr2 id=recov></div></div></figure>
+    <figure class=fig><div class="feed r43"><img id=k-wrist data-src="/collect/view/wrist" data-ms=300 alt=""><div class=nofeed>No signal</div><div class=tl><span class=ov>Wrist · policy input</span></div></div></figure>
+   </div>
+
+   <div class=rc-keys id=rc-keys>
+    <button class=rc-key id=key-g onclick="recKey('grasped')"><kbd>G</kbd><span><b>Grasped, take over</b><em>You hold the block but the robot didn't notice</em></span></button>
+    <button class=rc-key id=key-x onclick="recKey('discard')"><kbd>X</kbd><span><b>Discard this pick</b><em>Fumble, knock-over or bad grip; it won't be used</em></span></button>
+    <button class=rc-key id=key-n onclick="recKey('next')"><kbd>N</kbd><span><b>Next</b><em>Continue after a discard, once the scene is fixed</em></span></button>
+    <button class=rc-key id=key-k onclick="recKey('skip')"><kbd>K</kbd><span><b>Start mirroring anyway</b><em>A joint can't get within 8°; the robot then creeps to the leader</em></span></button>
+   </div>
+  </div>
+
+  <aside class=rc-rail>
+   <div class="card rc-run">
+    <div class=ch><h3>Run</h3><span class=r id=runbadge></span></div>
+    <div class=rc-tally><span class=n id=ringn>0</span><span class=of id=ringt>episodes</span></div>
+    <div class=rc-bar><i id=rc-barfill></i></div>
+    <div class="small muted rc-sess" id=runinfo>Not running.</div>
+
+    <div class=field><label for=brick>Block <span id=rc-sw></span></label><input id=brick list=bricklist placeholder="e.g. red" autocomplete=off><datalist id=bricklist></datalist>
+     <div class=hint>Always the same name for the same block: it names its dataset.</div></div>
+    <div class=field><label>Block type</label><div class="seg full" id=labseg><button data-l=good class="on good" onclick="setLab('good')">Good · no cross</button><button data-l=defect onclick="setLab('defect')">Defect · has a cross</button></div></div>
+    <div class=fields2>
+     <div class=field><label for=n>Episodes</label><input id=n type=number value=30 min=1><div class=hint>Stops after this many successes</div></div>
+     <div class=field><label for=c-jit>Put-back turn (°)</label><input id=c-jit type=number min=0 max=90><div class=hint>Random ± turn each time</div></div>
+    </div>
+    <div class=field><label for=c-speed>Robot speed <span id=spv class=muted></span></label><input id=c-speed type=range min=10 max=100><div class=hint>Start at 30–50 %</div></div>
+    <button class="btn primary lg block" id=startbtn onclick="startCol()"><svg class=i><use href="#i-play"/></svg>Start recording</button>
+    <button class="btn stop lg block" id=stopbtn onclick="recStop()" hidden><svg class=i><use href="#i-stop"/></svg>Stop<kbd>Space</kbd></button>
+   </div>
+
+   <div class="card rc-pre" id=rc-pre><div class=ch><h3>Before you start</h3><span class=r id=rc-presum></span></div><div id=precheck></div></div>
+
+   <div class="card rc-opt"><div class=ch><h3><svg class=i><use href="#i-flask"/></svg>Options after WP1</h3><span class="r badge line">experimental</span></div>
+    <label class=switch><input type=checkbox id=o-phase2 onchange="recCfg('phase2',this.checked)"><span class=tr></span><span><b>Front-camera photos at WP2</b><span class=d>Anomaly data (phase 2). Needs “above WP2” and “WP2” taught.</span></span></label>
+    <label class=switch><input type=checkbox id=o-regrasp onchange="recCfg('regrasp',this.checked)"><span class=tr></span><span><b>Tape-spot 90° re-grip + second photo</b><span class=d><span class=rc-warn>Not reliable yet</span> (issue 12). Only with photos on.</span></span></label>
+   </div>
+  </aside>
+ </div>
+
+ <div class=rc-guide id=rc-guide>
+  <div class=rc-gcol><h3 class=rc-gh>How many, how varied <span>per block</span></h3>
+   <ol class=steps-list>
+    <li><span><b>Round 1, block alone:</b> 30–50 episodes all over the plate, every orientation (flat, turned, on its side, upside down, near the edge).</span></li>
+    <li><span><b>Round 2, other blocks lying around</b> as distractors: 20–30 episodes, same block name.</span></li>
+    <li><span>Repeat for each of the 3 blocks.</span></li>
+    <li><span>Check them under <a href="/episodes">Episodes</a>, then <a href="/train">export and train</a>.</span></li></ol>
+   <p class="small muted rc-gnote">Consistent technique beats speed: the export removes hesitation and slowness anyway.</p></div>
+  <div class=rc-gcol id=rc-wrong><h3 class=rc-gh>When something goes wrong</h3>
+   <ul class=clean>
+    <li><b>Robot does something unexpected:</b> press Space. Fix it, then Start again (finished episodes are kept).</li>
+    <li><b>“missed”:</b> the block fell out on the way to WP1. It isn't used; put the block back on the plate.</li>
+    <li><b>BLOCKED:</b> something is in the arm's way. Clear it, then Start again.</li>
+    <li><b>Stuck on Match:</b> check the joint gaps; press K if one joint can't get close.</li>
+    <li><b>Put-back lands badly:</b> fine, it's just a new starting position.</li></ul></div>
+ </div>
+</section>

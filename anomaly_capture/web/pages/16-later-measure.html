@@ -1,0 +1,32 @@
+<section class=page id=p-later-measure data-path="/later/measure" data-title="Speed &amp; hardware" data-nav="Speed & hardware" data-group=later data-phase="Phase 7" data-icon=gauge
+ data-summary="Put each model on CPU, iGPU or NPU and measure latency, cycle time, power and temperature for the report.">
+ <header class=ph>
+  <div class=eyebrow><b>Phase 7</b> · Later <span class="badge line">Not built yet</span></div>
+  <h1>Speed <em>&amp;</em> hardware</h1>
+  <p class=lead>The last phase is about efficiency on Intel hardware: which model runs where, how long each step takes, and what it costs in power and heat.
+   The idea is to spend compute only on the hard bricks.</p>
+ </header>
+ <div class=later-grid>
+  <div class=prose>
+   <h2>Adaptive cascade</h2>
+   <ol class=steps-list>
+    <li><span><b>Stage 1, fast:</b> EfficientAd INT8 on the <b>NPU</b>. Clearly good or clearly defect exits here.</span></li>
+    <li><span><b>Stage 2, accurate:</b> PatchCore at a high-resolution crop on the <b>iGPU</b>, only for the unsure ones.</span></li>
+    <li><span><b>Stage 3, active perception:</b> still unsure, the arm brings the wrist camera close and scores again. Still unsure: reject the brick.</span></li>
+   </ol>
+   <p>Calibration is the key risk: a stage-1 “good” exit must never miss a defect, so its threshold comes from the smallest crosses in the validation set.</p>
+   <h2>What to measure</h2>
+   <table>
+    <thead><tr><th>Model</th><th>Device</th><th>Precision</th><th>Latency / step</th><th>Cycle</th><th>Power</th><th>Temp.</th></tr></thead>
+    <tbody><tr><td colspan=7 class=muted>Filled in during this phase (also in SO101_SETUP_STATUS.md §9).</td></tr></tbody>
+   </table>
+   <p style="margin-top:16px">Report the exit rate per stage, mean and p95 latency per brick and energy per brick, compared with running the heavy model on every brick.</p>
+  </div>
+  <aside class=later-aside>
+   <div class=k>Builds on</div>
+   <div class=check><span class="ic opt"></span><span><a href="/later/autonomous">The autonomous loop</a></span></div>
+   <div class=k>Open blocker</div>
+   <p class="small muted">The NPU user-space driver is not installed yet (see the setup notes, §6). Install it first, then check that OpenVINO lists <code>NPU</code>.</p>
+  </aside>
+ </div>
+</section>

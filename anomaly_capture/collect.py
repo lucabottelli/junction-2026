@@ -35,12 +35,15 @@ from arm import BODY, JOINTS, TICK_PER_DEG, Stopped
 FPS = 30
 REC_CAMS = ["top", "wrist", "front"]     # stored per frame; ACT uses top + wrist (see prep.py)
 MATCH_DEG = 8.0          # leader must be within this of the follower (every body joint) to start mirroring
-HOLD_GAP = 40            # ticks: gripper commanded this much more closed than it actually is ...
+HOLD_GAP = 20            # ticks: gripper commanded this much more closed than it actually is ... (real SO-101 squeezing a
+                         # Duplo brick: 28-37, the leader's closed end limits it; 40 never triggered -> everything needed G)
 HOLD_STILL = 4           # ... and not moving more than this over 0.25 s ...
 HOLD_MIN_OPEN = 50       # ... and not fully shut (ticks above the closed end) = holding something
 HOLD_TIME = 0.3          # s the above must hold
 TAIL_S = 0.4             # keep recording this long after the grasp (the policy must learn to close firmly)
 MAX_PICK_S = 90
+PUT_PAN_DEG = 5.0        # put-back: shift the block sideways by up to this much shoulder pan (new start position each episode)
+PUT_MIN_TURN = 0.3       # put-back: turn at least this fraction of roll_jitter, so every episode starts clearly different
 REGRIP_OPEN = 0.9        # gripper opening (fraction of its range) when coming down on the released brick
 REGRIP_SQUEEZE = 80      # ticks the re-grip closes past the width where the fingers stalled on the brick
 
@@ -60,12 +63,46 @@ class GraspDetector:
         return bool(self.since and now - self.since >= HOLD_TIME)
 
 
+LIFT_J = ("shoulder_lift", "elbow_flex", "wrist_flex")   # the joints that raise / lower the gripper
+LIFT_FRAC = 0.2          # hand-off when the closed gripper has been raised this fraction of the way from the grasp pose to WP1 (~3 cm)
+STALL_FALLBACK_S = 1.5   # ... or when the fingers have stalled on the brick and the arm is held still this long (no lift)
+
+
+class HandoffDetector:
+    """When the robot takes over the pick (collection episode() and the ACT run-time in policy.py use the SAME rule):
+      * LIFT  (main): the gripper is closed on something (commanded closed, fingers not fully shut) and the arm has been
+               raised `lift_frac` of the way from the pose where it closed toward WP1 (measured on lift/elbow/wrist flex,
+               projected on the grasp -> WP1 direction, so it needs no calibration) for 0.1 s;
+      * STALL (fallback): GraspDetector's stall rule, held for `stall_s` (you closed firmly and wait without lifting).
+    update(now, pos, goal) -> True once; then .why is "lift" or "auto". .lift = progress 0..1 for the UI."""
+    def __init__(self, glim, wp1, lift_frac=LIFT_FRAC, stall_s=STALL_FALLBACK_S):
+        self.gmin, self.gmax = glim; self.wp1, self.frac, self.stall_s = wp1, lift_frac, stall_s
+        self.g0 = None; self.stall = GraspDetector(self.gmin); self.lift = 0.0; self.why = None; self.lift_since = None
+
+    def update(self, now, pos, goal):
+        g, c = pos["gripper"], goal["gripper"]
+        gn = (c - self.gmin) / max(1, self.gmax - self.gmin) * 100
+        closed_on = gn < 25 and g - self.gmin > HOLD_MIN_OPEN
+        if gn > 40: self.g0 = None                                     # opened again: a new grasp attempt
+        elif closed_on and self.g0 is None: self.g0 = {n: pos[n] for n in LIFT_J}
+        self.lift = 0.0
+        if self.g0 is not None and closed_on:
+            d = {n: self.wp1[n] - self.g0[n] for n in LIFT_J}; dd = sum(v * v for v in d.values())
+            if dd > (10 * TICK_PER_DEG) ** 2:                            # WP1 clearly away from the grasp pose
+                self.lift = max(0.0, sum((pos[n] - self.g0[n]) * d[n] for n in LIFT_J) / dd)
+        self.lift_since = (self.lift_since or now) if self.lift >= self.frac else None
+        if self.lift_since and now - self.lift_since >= 0.1: self.why = "lift"; return True
+        self.stall.update(now, g, c)
+        if self.stall.since and now - self.stall.since >= self.stall_s: self.why = "auto"; return True
+        return False
+
+
 class Collector:
     def __init__(self, S, A, ctx, DATA, ROOT):
         self.S, self.A, self.ctx, self.DATA = S, A, ctx, DATA
         self.EP = ROOT / "episodes"; self.EP.mkdir(exist_ok=True)
         self.cfg_path = Path(__file__).resolve().parent / "collect_settings.json"
-        self.cfg = {"home": "home", "wp1": "wp1", "wp2": "wp2", "drops": "drops", "phase2": False, "regrasp": False, "speed": 0.5, "roll_jitter": 45,
+        self.cfg = {"home": "home", "wp1": "wp1", "wp2": "wp2", "drops": "drops", "phase2": False, "regrasp": False, "speed": 0.5, "roll_jitter": 90, "lift_frac": LIFT_FRAC,
                     "act_roi": {k: prep.default_act_roi(k) for k in REC_CAMS}}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
@@ -287,7 +324,7 @@ class Collector:
         rec_stop = threading.Event(); rec = threading.Thread(target=self._record, args=(buf, rec_stop), daemon=True)
         self.flags["grasped"] = self.flags["discard"] = False
         self.state = "pick"; t0 = time.time(); attempts, was_open = 0, True
-        hold_since, gq, reason = None, [], None
+        det = HandoffDetector((gmin, gmax), wp1, float(self.cfg.get("lift_frac", LIFT_FRAC))); reason = None
         rec.start()
         try:
             while True:
@@ -297,14 +334,12 @@ class Collector:
                 gn = (c - gmin) / max(1, gmax - gmin) * 100
                 if was_open and gn < 25: attempts += 1; was_open = False
                 elif gn > 40: was_open = True
-                gq = [(t, v) for t, v in gq if now - t < 0.25] + [(now, g)]
-                still = max(v for _, v in gq) - min(v for _, v in gq) <= HOLD_STILL and now - gq[0][0] > 0.2
-                if c < g - HOLD_GAP and still and g - gmin > HOLD_MIN_OPEN:
-                    hold_since = hold_since or now
-                else: hold_since = None
-                self.info = {"attempts": attempts, "t": round(now - t0, 1), "frames": len(buf["t"])}
-                self.say(f"● REC  pick the brick  ·  {now - t0:.1f} s  ·  grasp attempts {attempts}")
-                if hold_since and now - hold_since >= HOLD_TIME: reason = "auto"; break
+                handed = det.update(now, A.pos, A.goal)
+                self.info = {"attempts": attempts, "t": round(now - t0, 1), "frames": len(buf["t"]),
+                             "lift": round(min(1.0, det.lift / max(1e-6, det.frac)) * 100)}
+                self.say(f"● REC  pick the brick, then lift it a little: the robot takes over  ·  {now - t0:.1f} s  ·  grasp attempts {attempts}"
+                         + (f"  ·  lift {self.info['lift']} %" if det.g0 is not None else ""))
+                if handed: reason = det.why; break
                 if self.flags["grasped"]: reason = "manual"; break
                 if self.flags["discard"]: reason = "discard"; break
                 if now - t0 > MAX_PICK_S: reason = "timeout"; break
@@ -397,31 +432,45 @@ class Collector:
         return n_img, on_tape
 
     def reset(self, home, wp1, drops, grasp_pose, g_lock, g_open, on_tape):
-        """Collection only: put the brick back on the orange plate so the next pick can start.
-        Reset spots taught -> drop at a random one. Otherwise -> put it back exactly where it was picked
-        (that path is known to be clear), turned by a random wrist angle for variety."""
+        """Collection only: put the brick back on the orange plate so the next pick starts from a NEW pose
+        (what the pick policy needs: many different start positions and orientations, each picked by the human).
+        Reset spots taught -> set it down at a random one. Otherwise -> back where it was picked (that path is known
+        to be clear and the height is right), shifted sideways a little and turned clearly, set down slowly."""
         A = self.A; self.state = "reset_auto"
         if on_tape:
             self.goto(home, gripper=g_open); time.sleep(1.0); return
-        jit = random.uniform(-1, 1) * self.cfg["roll_jitter"] * TICK_PER_DEG
+        J = self.cfg["roll_jitter"]
+        turn = random.choice((-1, 1)) * random.uniform(PUT_MIN_TURN * J, J) if J > 0 else 0.0     # degrees
+        leader_rest = " · meanwhile put the leader back in its rest position"
+
+        def step(i, txt):
+            self.info = {"step": f"{i}/4 {txt}", "turn": round(turn)}
+            self.say(f"putting the block back {i}/4: {txt}{leader_rest}")
+        step(1, "up to waypoint 1")
+        self.goto(wp1, gripper=g_lock)
         if drops:
-            self.say("resetting: robot drops the brick at a random reset spot · put the leader back in its rest position")
-            self.goto(wp1, gripper=g_lock)
             d = random.choice(drops)["pos"]
-            self.goto(d, gripper=g_lock, wrist_roll=d["wrist_roll"] + jit)
-            self.goto(dict(A.cmd), 1.0, gripper=g_open); time.sleep(0.2)      # release
+            step(2, f"over a random reset spot, turning the block {turn:+.0f}°")
+            self.goto(d, gripper=g_lock, wrist_roll=d["wrist_roll"] + turn * TICK_PER_DEG)
+            step(3, "setting it down")
+            self.goto(dict(A.cmd), 0.4, gripper=g_open); time.sleep(0.2)                       # release
+            step(4, "letting go, back to the start pose")
             self.rise(wp1)
         else:
-            self.say("resetting: robot puts the brick back where it picked it, turned a bit · put the leader back in its rest position")
-            self.goto(wp1, gripper=g_lock)
-            above = {**grasp_pose, "shoulder_lift": wp1["shoulder_lift"], "elbow_flex": wp1["elbow_flex"],
-                     "wrist_flex": wp1["wrist_flex"]}
-            roll = grasp_pose["wrist_roll"] + jit
-            self.goto(above, gripper=g_lock, wrist_roll=roll)
-            self.goto(grasp_pose, self.cfg["speed"] * 0.4, gripper=g_lock, wrist_roll=roll)   # gently down
-            self.goto(dict(A.cmd), 0.4, gripper=g_open); time.sleep(0.2)                       # let go
-            self.goto(above, self.cfg["speed"] * 0.6, gripper=g_open, wrist_roll=roll)          # straight up
+            pan = grasp_pose["shoulder_pan"]
+            shift = random.uniform(-1, 1) * PUT_PAN_DEG * TICK_PER_DEG
+            shift += 0.3 * max(-PUT_PAN_DEG * TICK_PER_DEG, min(PUT_PAN_DEG * TICK_PER_DEG, wp1["shoulder_pan"] - pan))  # drift toward the plate centre (WP1), never off the edge
+            spot = {**grasp_pose, "shoulder_pan": pan + shift, "wrist_roll": grasp_pose["wrist_roll"] + turn * TICK_PER_DEG}
+            above = {**spot, "shoulder_lift": wp1["shoulder_lift"], "elbow_flex": wp1["elbow_flex"], "wrist_flex": wp1["wrist_flex"]}
+            step(2, f"over the pick spot (moved {shift / TICK_PER_DEG:+.0f}° sideways), turning the block {turn:+.0f}°")
+            self.goto(above, gripper=g_lock)
+            step(3, "lowering it slowly onto the plate")
+            self.goto(spot, self.cfg["speed"] * 0.3, gripper=g_lock)                        # gently down
+            self.goto(dict(A.cmd), 0.4, gripper=g_open); time.sleep(0.2)                      # let go
+            step(4, "letting go, straight up, back to the start pose")
+            self.goto(above, self.cfg["speed"] * 0.6, gripper=g_open)                       # straight up
         self.goto(home, gripper=g_open)
+        self.info = {}
 
     # ------------------------------------------------------------------ recovery: a failed episode pauses, it never ends the run
     WHY = {"blocked": "BLOCKED", "missed": "MISSED", "discard": "DISCARDED", "timeout": "TIMED OUT", "error": "ERROR"}
@@ -580,7 +629,7 @@ def make_router(S, A, ctx, DATA, ROOT):
     @r.post("/collect/cfg")
     def cfg(home: str = "", wp1: str = "", wp2: str = "", drops: str = "", speed: float = 0,
             roll_jitter: float = -1, inspect_cams: str = "", phase2: str = "", regrasp: str = "",
-            release_cams: str = None):
+            release_cams: str = None, lift_frac: float = -1):
         if phase2: C.cfg["phase2"] = phase2 == "true"
         if regrasp: C.cfg["regrasp"] = regrasp == "true"
         if home: C.cfg["home"] = home
@@ -589,6 +638,7 @@ def make_router(S, A, ctx, DATA, ROOT):
         if drops: C.cfg["drops"] = drops
         if speed: C.cfg["speed"] = min(1.0, max(0.1, speed))
         if roll_jitter >= 0: C.cfg["roll_jitter"] = min(90, roll_jitter)
+        if lift_frac >= 0: C.cfg["lift_frac"] = min(0.8, max(0.05, lift_frac))
         if inspect_cams: C.cfg["inspect_cams"] = [c for c in inspect_cams.split(",") if c]
         if release_cams is not None: C.cfg["release_cams"] = [c for c in release_cams.split(",") if c]
         C.save_cfg(); return status()

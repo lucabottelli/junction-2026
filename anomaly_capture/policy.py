@@ -50,7 +50,7 @@ import numpy as np
 
 import prep
 from arm import BLOCKED, BODY, JOINTS, MIRROR_VMAX, TICK_PER_DEG, Stopped
-from collect import FPS, TAIL_S, GraspDetector
+from collect import FPS, TAIL_S, GraspDetector, HandoffDetector, LIFT_FRAC
 from export_act import POLICY_CAMS, denormalize, normalize
 
 HERE = Path(__file__).resolve().parent
@@ -392,7 +392,8 @@ class ActPick:
         """Drive with the policy from the start pose until the hand-off. -> 'grasp' | 'manual' | 'timeout'."""
         A, clk = self.A, self.clock
         self.p.reset(); self.ex.reset()
-        det = GraspDetector(A.fl["gripper"][0]); t0 = clk.now(); i = 0; done_at = None; why = "timeout"
+        det = HandoffDetector(A.fl["gripper"], self.C.wps("wp1")[0]["pos"], float(self.C.cfg.get("lift_frac", LIFT_FRAC)))   # same rule as the demos
+        t0 = clk.now(); i = 0; done_at = None; why = "timeout"
         lag_since = None; late = 0; dts = []; last = t0
         A.vmax = MIRROR_VMAX * max(0.1, min(1.0, self.speed))
         while True:
@@ -407,7 +408,7 @@ class ActPick:
                 raise PickFailed(f"BLOCKED: the arm stays {lag / TICK_PER_DEG:.0f}° behind the policy's target: something is in the way", retry=False)
             if done_at is None:
                 if self.grasped(): done_at, why = now, "manual"
-                elif det.update(now, A.pos["gripper"], A.goal["gripper"]): done_at, why = now, "grasp"
+                elif det.update(now, A.pos, A.goal): done_at, why = now, ("grasp" if det.why == "auto" else det.why)
             self.live = {"attempt": k + 1, "of": self.retries + 1, "t": round(t, 1), "steps": i + 1, **self.ex.stats()}
             if done_at is not None and now - done_at >= TAIL_S: break     # keep closing a little longer, as in the demos
             if done_at is None and t > self.max_s: break

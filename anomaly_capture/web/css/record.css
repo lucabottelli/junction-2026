@@ -109,7 +109,8 @@
 #p-record .rc-nbtn.hit{animation:rc-hit .5s ease-out}
 
 /* pick / carry: stats */
-#p-record .rc-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+#p-record .rc-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+#p-record .rc-stat.ok .v{color:var(--ok)}
 #p-record .rc-stat{padding:0 22px}
 #p-record .rc-stat:first-child{padding-left:0}
 #p-record .rc-stat+.rc-stat{border-left:1px solid var(--line)}

@@ -17,7 +17,7 @@ const HERO={
  idle:['Ready to record','Leader resting in its rest position. Name the block, pick how many episodes and press Start.','Waits.'],
  home:['Going to the start pose','Hands off the robot. The leader rests in its rest position.','Moves to the start pose with the gripper open.'],
  match:['Match the leader','Put the leader in the same pose as the robot, until every marker sits in the middle zone.','Waits; starts copying the leader once every joint is within 8°.'],
- pick:['Pick the block','One smooth, direct grasp. Close firmly and keep squeezing.','Copies the leader and records. Notices by itself when the gripper closes on the block.'],
+ pick:['Pick the block','One smooth grasp, keep squeezing, then lift it a little (~3 cm). The robot takes over as soon as it is lifted.','Copies the leader and records. Takes over when the closed gripper is lifted (or after you hold still 1.5 s).'],
  carry:['Let go of the leader','Let go and '+REST+' now.','Lifts straight up and carries the block to waypoint 1, still recording, clamp unchanged.'],
  capture:['Photos at WP2',REST[0].toUpperCase()+REST.slice(1)+' now, if it isn\'t there yet.','Moves to WP2 and photographs the block with the front camera.'],
  regrasp:['Re-grip on the tape spot',REST[0].toUpperCase()+REST.slice(1)+' now, if it isn\'t there yet.','Sets the block down, turns the wrist 90° and grips it again with the same clamp.'],
@@ -40,7 +40,7 @@ const CYCLE=[
  {t:'Robot to start pose',sh:'Hands off',robot:'Drives to its start pose, gripper open.',you:'Hands off. Put the block anywhere on the orange plate, any orientation.'},
  {t:'Match the leader',sh:'Leader to the same pose',you:'Put the leader in the SAME pose as the robot. Mirroring starts by itself once all 5 joints are within 8°.',
   tip:'Taught the start pose with the leader lying in its natural rest position? Then this step is just: set the leader down in its rest.'},
- {t:'Pick',sh:'One grasp, keep squeezing',rec:1,you:'Pick the brick in one smooth grasp. Close firmly and keep squeezing.',robot:'Copies the leader and records.'},
+ {t:'Pick',sh:'Grasp, squeeze, lift a little',rec:1,you:'Pick the brick in one smooth grasp, keep squeezing and lift it a little (~3 cm): that hands it to the robot.',robot:'Copies the leader and records; takes over when the block is lifted.'},
  {t:'Let go · leader to rest',sh:'Let go, leader to rest',rec:1,you:'As soon as the robot takes over, let go of the leader and put it back in its rest position.',
   robot:'Carries the brick to WP1 (photos at WP2 if on), puts it back and returns to start. Your next match is then instant.'}];
 const STEP_OF={home:0,match:1,pick:2,reset:2,carry:3,capture:3,regrasp:3,reset_auto:3};
@@ -64,7 +64,7 @@ function demo(st,real){const r=real||{},t=Date.now()/1000,w=x=>Math.round(x*10)/
  if(st=='match'){const s={shoulder_pan:w(2.1+ph*3),shoulder_lift:w(-4.6),elbow_flex:w(-(38*(1-ph)+3)),wrist_flex:w(14*(1-ph)+1),wrist_roll:w(71-ph*20)};
   c.info={signed:s,gaps:Object.fromEntries(Object.entries(s).map(([k,x])=>[k,Math.abs(x)]))};
   c.msg='move the LEADER to the robot\'s pose: biggest gap wrist_roll 71° (needs ≤8°)'}
- if(st=='pick'){const tt=w(t%9);c.info={t:tt,attempts:tt>6?2:1,frames:Math.round(tt*30)};c.msg=`● REC  pick the brick  ·  ${tt} s  ·  grasp attempts ${c.info.attempts}`}
+ if(st=='pick'){const tt=w(t%9);c.info={t:tt,attempts:tt>6?2:1,frames:Math.round(tt*30),lift:Math.max(0,Math.min(100,Math.round((tt-4)*25)))};c.msg=`● REC  pick the brick  ·  ${tt} s  ·  grasp attempts ${c.info.attempts}`}
  if(st=='carry'){c.info={t:4.2,attempts:1,frames:139};c.msg='● REC  robot carries the brick to waypoint 1: hands off'}
  if(st=='capture'){c.info={step:'WP2 1/2 front'};c.msg='phase 2: photos at WP2'}
  if(st=='reset_auto'){c.info={images:0};c.msg='putting the block back with a random turn'}
@@ -147,8 +147,9 @@ function recoverHtml(c){const i=c.info||{},W=WHY[i.why]||WHY._,fails=+c.fails||0
   <div class=rc-rcv-go><button class="btn primary lg rc-nbtn" id=rc-nbtn onclick="recKey('next')"><kbd>N</kbd>Next episode</button>
    ${fails?`<span class="small muted">${fails} fail${fails>1?'s':''} this run</span>`:''}</div></div>`}
 
-function statsHtml(i,live){const att=+i.attempts||0;
- return `<div class=rc-stats>
+function statsHtml(i,live){const att=+i.attempts||0,lf=i.lift==null?null:Math.max(0,Math.min(100,+i.lift||0));
+ return `<div class=rc-stats>${live&&lf!=null?`
+  <div class="rc-stat${lf>=100?' ok':''}"><div class=k>Lift to hand over</div><div class=v>${lf}<small>%</small></div><div class=s>${lf>=100?'handing over':'grasp, then lift ~3 cm'}</div></div>`:''}
   <div class=rc-stat><div class=k>Pick time</div><div class=v>${esc(isFinite(+i.t)?(+i.t).toFixed(1):i.t)}<small>s</small></div></div>
   <div class="rc-stat${att>1?' warn':''}"><div class=k>Grasp attempts</div><div class=v>${att}</div>${att>1?'<div class=s>Export keeps 1-attempt picks; X discards</div>':''}</div>
   <div class=rc-stat><div class=k>Frames</div><div class=v>${esc(i.frames)}</div>${live?'':'<div class=s>Carry is still recorded</div>'}</div></div>`}

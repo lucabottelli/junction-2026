@@ -523,6 +523,23 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - **Tip:** teach `home` with the leader resting in its natural rest position. Each match is then just "set the leader down". This tip is on the Record and Waypoints pages.
     - **Tested** on the mock station: BLOCKED in the carry pauses → N continues; STOP → resume → 3/3 done; STOP during the put-back keeps the count. New flow test `test_blocked_carry_pauses_run_then_stop_and_resume` in `tests/test_mock_flows_collect.py`. Not yet run on the real arm.
 
+28. **Hand-off by lifting; grasp detection fixed; the put-back varies the start pose** (2026-11-14 ≈13:30, the user's request: "as soon as I pick it up, move to waypoint 1").
+    - **Measured on the real arm:**
+      - In the first 3 blue episodes every hand-off needed G. Squeezing a Duplo, the follower gripper stays only **28–37 ticks** short of its command, because the leader's closed end limits it.
+      - The stall rule needed `HOLD_GAP` 40, so it never fired. **`HOLD_GAP` is now 20.**
+    - **New rule, `collect.HandoffDetector`:**
+      - **Main trigger, lift.** The gripper must be commanded closed with the fingers not fully shut, so something is between them. The robot takes over once the arm has been raised `lift_frac` (default **0.2**, about 3 cm, setting `/collect/cfg?lift_frac=`) of the way from the pose where it closed toward WP1, held for 0.1 s.
+        - This is measured on shoulder_lift / elbow_flex / wrist_flex, projected on the grasp→WP1 direction, so it needs no calibration.
+      - **Fallback, stall.** The old rule, held 1.5 s (close firmly and wait). G remains the manual trigger.
+      - **`policy.py` uses the same rule at run time.** The policy imitates "grasp, squeeze, lift a little", and the lift hands over to the scripted carry.
+      - Unit-checked: lift fires; an empty shut gripper or an open moving gripper never fires; stall fires after about 1.7 s. tests/test_policy.py gives the same results as before (the 2 ONNX IR-version failures are environment-only). Mock collection 4/4.
+    - **Put-back for pick training: every episode starts from a new pose.**
+      - Turn: random, between 30% of `roll_jitter` and all of it, either direction. The default `roll_jitter` is now 90°, so the block ends up at every orientation.
+      - Position: a sideways shift of up to ±5° of shoulder pan, pulled 30% toward WP1's pan (the plate centre), so it never walks off the edge.
+      - Lowered slowly (0.3 × speed).
+      - Each sub-step 1/4–4/4 is shown in the status line and the page.
+      - The robot does not re-grip by itself: only human picks are training data, so the robot's job is to vary the start pose.
+
 ---
 
 ## 5. Issues and fixes log

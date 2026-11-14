@@ -74,6 +74,18 @@
 #p-waypoints #wp-ph2.off .wps{opacity:.55;transition:opacity .2s}
 #p-waypoints #wp-ph2.off .wps:hover,#p-waypoints #wp-ph2.off .wps:focus-within{opacity:1}
 
+/* ---------- re-grip test: current step + numbers ---------- */
+#p-waypoints #wp-rg:not(:empty){margin-top:20px}
+#p-waypoints .wp-rg .sub code{font-size:11.5px}
+#p-waypoints .wp-rg-body{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:24px;align-items:start;margin:14px 0 4px}
+#p-waypoints .wp-rg-t{min-width:0;overflow-x:auto}
+#p-waypoints .wp-rg td,#p-waypoints .wp-rg th{padding-top:7px;padding-bottom:7px;font-size:12.5px;white-space:nowrap}
+#p-waypoints .wp-rg td:nth-child(2){white-space:normal;min-width:180px}
+#p-waypoints .wp-rg tr.wp-rg-cur td{color:var(--ink)}
+#p-waypoints .wp-rg tr.wp-rg-cur td:first-child{color:var(--acc)}
+#p-waypoints .wp-rg-note{margin:10px 0 0;font-size:12px;line-height:1.55;color:var(--ink3);max-width:70ch}
+#p-waypoints .wp-rg .row{margin-top:14px}
+
 /* ---------- narrow ---------- */
 @media (max-width:1180px){
  #p-waypoints .rt-row{grid-template-columns:1fr;gap:16px}
@@ -92,4 +104,5 @@
  #p-waypoints .wps-j>div:nth-child(4){padding-left:0;border-left:0}
  #p-waypoints .wps-j>div:nth-child(n+4){border-top:1px solid var(--line)}
  #p-waypoints .wps-acts{margin-left:0}
+ #p-waypoints .wp-rg-body{grid-template-columns:1fr}
 }

@@ -24,6 +24,7 @@ the hardware, the plan and the next steps.
 | `anomaly_capture/mock_hw.py`, `tests/`, `Makefile`, `docs/DEV.md` | Mock station (`make mock`), tests (`make test`), no hardware needed |
 | `anomaly_capture/sim_test.py` | Hardware-free test of the inspection logic: `python3 anomaly_capture/sim_test.py` |
 | `anomaly_capture/prep.py` | Image preprocessing shared by collection, export and the future runtime (crops, depth background mask) |
+| `anomaly_capture/rs_depth.py` | Close-range depth on the front D415: 424x240 + disparity shift (advanced mode), window math, auto-tune scoring (`/depth/status`, `/depth/autotune`, `/depth/reset`) |
 | `anomaly_capture/ui.py` | The single web page |
 | `anomaly_capture/cam_settings.json`, `routines.json`, `collect_settings.json` | Locked camera settings, taught waypoints, collection settings (station-specific) |
 | `scripts/` | Small hardware helper scripts |

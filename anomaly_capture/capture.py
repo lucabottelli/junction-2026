@@ -30,11 +30,15 @@ if MOCK:
     import mock_hw
 else:
     import pyrealsense2 as rs
+import prep, rs_depth      # noqa: E402  (after mock_hw: in mock mode it redirects prep's settings file first)
 PORT = int(os.environ.get("JUNCTION_PORT", "7870"))
 
 CAMS = ["top", "front", "wrist"]
 RS_SERIAL = {"top": "243622063627", "front": "243622061066"}
 DEPTH_CAMS = {"front"}   # aligned depth (mm) kept alongside colour for background masking
+# Depth stream config per depth camera: cam_settings.json "<cam>_depth" (see rs_depth.DEFAULT): resolution (Min-Z scales
+# with it: 424x240 measures from ~14 cm, 1280x720 only from ~42 cm), disparity "shift" (or "near_mm" to compute it),
+# "advanced" (allow advanced mode, needed for the shift) and "expect_z_mm" (held-brick distance found by /depth/autotune)
 WRIST_DEV = 16
 ROOT = Path(__file__).resolve().parent.parent  # ~/junction26
 DATA = ROOT / "training_images"
@@ -71,24 +75,105 @@ class RSCam:
 
     def __init__(self, name):
         self.name = name
-        self.depth, self.depth_t, self.align, self.n = None, 0.0, None, 0
-        self.pipe = rs.pipeline()
-        prof = None
-        if name in DEPTH_CAMS:      # depth lets us grey out everything behind the held brick (people walking past)
-            try:
-                cfg = rs.config(); cfg.enable_device(RS_SERIAL[name])
-                cfg.enable_stream(rs.stream.color, 1920, 1080, rs.format.bgr8, 30)
-                cfg.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
-                prof = self.pipe.start(cfg); self.align = rs.align(rs.stream.color)
-                self.depth_scale = prof.get_device().first_depth_sensor().get_depth_scale()
-            except Exception as e:
-                print(f"{name}: depth stream unavailable ({e}), colour only"); prof = None; self.pipe = rs.pipeline()
+        self.depth, self.depth_t, self.align, self.n, self.depth_n = None, 0.0, None, 0, 0
+        self.depth_scale, self.dinfo, self.dev = 0.001, None, None
+        self.pipe = None
+        prof = self._start_depth_safe() if name in DEPTH_CAMS else None   # depth greys out everything behind the brick
         if prof is None:
+            self.pipe = rs.pipeline()                 # fresh: an advanced-mode toggle may have reset the device
             cfg = rs.config(); cfg.enable_device(RS_SERIAL[name])
             cfg.enable_stream(rs.stream.color, 1920, 1080, rs.format.bgr8, 30)
             prof = self.pipe.start(cfg)
         self.sen = prof.get_device().first_color_sensor()
         self.settings = self._lock()
+
+    def _start_depth_safe(self):
+        """_start_depth that never raises: any unexpected error -> colour only (as before), reason in self.dinfo."""
+        try:
+            return self._start_depth()
+        except Exception as e:
+            print(f"!! {self.name}: depth setup failed ({e!r}), colour only")
+            try:
+                if self.pipe is not None: self.pipe.stop()
+            except Exception: pass
+            self.pipe, self.align, self.dev = None, None, None
+            self.dinfo = {"enabled": False, "width": None, "height": None, "shift": 0, "advanced": False, "near_mm": None,
+                          "far_mm": None, "fx_depth": None, "baseline_mm": None, "fx_color": None, "expect_z_mm": None,
+                          "max_obj_mm": None, "warning": f"depth setup failed ({e}): colour only"}
+            return None
+
+    def _start_depth(self):
+        """Colour 1080p + close-range depth (resolution and disparity shift from cam_settings.json "<cam>_depth").
+        Never raises: advanced mode / shift problems -> shift 0 with a warning in self.dinfo; no depth stream at all
+        -> None (the caller starts colour only, as before)."""
+        serial = RS_SERIAL[self.name]
+        c = rs_depth.resolve_config(load_settings().get(f"{self.name}_depth"))
+        st = {"enabled": False, "width": c["width"], "height": c["height"], "fps": c["fps"], "shift": 0, "advanced": False,
+              "near_mm": None, "far_mm": None, "fx_depth": None, "baseline_mm": None, "fx_color": None,
+              "expect_z_mm": c.get("expect_z_mm"), "max_obj_mm": c.get("max_obj_mm"), "warning": None}
+        warn, adv_ok = ([c["config_warning"]] if c.get("config_warning") else []), False
+        if c["advanced"]:      # BEFORE the pipeline starts: enabling it resets the camera (handled in enable_advanced)
+            adv_ok, msg = rs_depth.enable_advanced(rs, serial)
+            if not adv_ok: warn.append(f"advanced mode unavailable ({msg}): disparity shift stays 0")
+        try:
+            self.pipe = rs.pipeline()                 # created AFTER a possible advanced-mode reset
+            cfg = rs.config(); cfg.enable_device(serial)
+            cfg.enable_stream(rs.stream.color, 1920, 1080, rs.format.bgr8, 30)
+            cfg.enable_stream(rs.stream.depth, c["width"], c["height"], rs.format.z16, c["fps"])
+            prof = self.pipe.start(cfg)
+        except Exception as e:
+            print(f"!! {self.name}: depth stream unavailable ({e}), colour only")
+            self.pipe = None; self.dinfo = {**st, "warning": f"depth stream unavailable ({e}): colour only"}
+            return None
+        self.align = rs.align(rs.stream.color); st["enabled"] = True
+        dev = prof.get_device(); dsen = dev.first_depth_sensor()
+        try: self.depth_scale = float(dsen.get_depth_scale())
+        except Exception: pass
+        try:
+            st["fx_depth"] = round(prof.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics().fx, 2)
+            st["fx_color"] = round(prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics().fx, 2)
+            st["baseline_mm"] = round(abs(float(dsen.get_option(rs.option.stereo_baseline))), 3)
+        except Exception as e:
+            warn.append(f"intrinsics/baseline unreadable ({e})")
+        shift, note = (rs_depth.initial_shift(c, st["fx_depth"], st["baseline_mm"])
+                       if st["fx_depth"] and st["baseline_mm"] else (0, "default"))
+        if adv_ok:
+            self.dev = dev
+            try:
+                shift = rs_depth.set_shift(rs, dev, shift); st["advanced"] = True
+            except Exception as e:
+                warn.append(f"could not set disparity shift {shift} ({e}): using 0")
+                try: shift = rs_depth.set_shift(rs, dev, 0)
+                except Exception: pass
+                shift = 0
+        else:
+            if shift: warn.append(f"wanted disparity shift {shift} ({note}) but advanced mode is off: using 0")
+            shift = 0
+            try:                                      # the device may still be in advanced mode with a stale shift
+                if rs.rs400_advanced_mode(dev).is_enabled(): rs_depth.set_shift(rs, dev, 0)
+            except Exception: pass
+        st["shift"] = shift
+        if st["fx_depth"] and st["baseline_mm"]: st.update(rs_depth.window_info(st["fx_depth"], st["baseline_mm"], shift))
+        st["warning"] = "; ".join(warn) or None
+        self.dinfo = st
+        if warn: print(f"!! {self.name} depth WARNING: {st['warning']}")
+        print(f"{self.name} depth: {c['width']}x{c['height']}, disparity shift {shift} ({note}) -> measures "
+              f"{st['near_mm']}-{st['far_mm'] or 'inf'} mm")
+        return prof
+
+    def depth_info(self):
+        """Depth config + window (None for a colour-only camera). Shown in /status and /depth/status, saved in meta."""
+        return dict(self.dinfo) if self.dinfo else None
+
+    def set_shift(self, shift):
+        """Change the disparity shift live (no restart). -> the shift now in the depth table."""
+        d = self.dinfo or {}
+        if not (d.get("advanced") and self.dev is not None):
+            raise RuntimeError("advanced mode is off on this camera: the disparity shift can't be changed")
+        s = rs_depth.set_shift(rs, self.dev, shift)
+        d["shift"] = s
+        if d.get("fx_depth") and d.get("baseline_mm"): d.update(rs_depth.window_info(d["fx_depth"], d["baseline_mm"], s))
+        return s
 
     def _grab(self, n=1):
         for _ in range(n):
@@ -134,7 +219,10 @@ class RSCam:
             try:
                 fa = self.align.process(f); d = fa.get_depth_frame()
                 if d:
-                    self.depth = np.asanyarray(d.get_data()).copy(); self.depth_t = time.time()
+                    dep = np.asanyarray(d.get_data())
+                    if abs(self.depth_scale - 0.001) > 1e-6:     # keep millimetres whatever the depth units are
+                        dep = np.clip(dep * (self.depth_scale * 1000.0), 0, 65535).astype(np.uint16)
+                    self.depth = dep.copy(); self.depth_t = time.time(); self.depth_n += 1
                 return np.asanyarray(fa.get_color_frame().get_data()).copy()
             except Exception as e:
                 print(f"{self.name}: depth align failed: {e}")
@@ -163,7 +251,12 @@ class WristCam:
 
 
 def open_cam(name):
-    if MOCK: return mock_hw.open_cam(name)
+    if MOCK:
+        c = mock_hw.open_cam(name)
+        if c is not None and name in DEPTH_CAMS:
+            try: c.configure_depth(rs_depth.resolve_config(load_settings().get(f"{name}_depth")))
+            except Exception as e: print(f"!! {name}: mock depth config failed ({e}), defaults"); c.configure_depth(rs_depth.resolve_config(None))
+        return c
     try:
         return RSCam(name) if name in RS_SERIAL else WristCam()
     except Exception as e:      # a missing camera must not take the whole tool down
@@ -383,8 +476,13 @@ def status():
             "stale": {k: round(v, 3) for k, v in S.stale.items()},
             "age": {k: (round(time.time() - t, 1) if t else None) for k, t in S.frame_t.items()},
             "reconnects": S.reconnects, "stale_max": STALE_FRAC, "recent": [r[0] for r in S.recent],
-            "settings": {k: (c.settings if c else None) for k, c in S.cams.items()},
+            "settings": {k: (_with_depth(c) if c else None) for k, c in S.cams.items()},
 }
+
+
+def _with_depth(c):
+    di = c.depth_info() if hasattr(c, "depth_info") else None
+    return {**c.settings, "depth": di} if di else c.settings
 
 
 @app.post("/enable/{cam}")
@@ -395,15 +493,17 @@ def enable(cam: str, on: bool):
 
 @app.post("/roi/{cam}")
 def set_roi(cam: str, x0: int, y0: int, x1: int, y1: int):
+    if cam == "front" and TUNE["running"]: S.say("NOT SET: depth auto-tune running", False); return status()
     x0, x1 = sorted((max(0, x0), min(1920, x1))); y0, y1 = sorted((max(0, y0), min(1080, y1)))
     if x1 - x0 < 60 or y1 - y0 < 60: S.say("NOT SET: detection area too small", False); return status()
-    S.roi[cam] = [x0, y0, x1, y1]; store_settings("roi", S.roi)
+    S.roi[cam] = [x0, y0, x1, y1]; store_settings("roi", S.roi); sync_inhand()
     S.say(f"{cam}: detection area set to {S.roi[cam]}"); return status()
 
 
 @app.post("/roi/{cam}/reset")
 def reset_roi(cam: str):
-    S.roi[cam] = list(DEFAULT_ROI[cam]); store_settings("roi", S.roi)
+    if cam == "front" and TUNE["running"]: S.say("NOT RESET: depth auto-tune running", False); return status()
+    S.roi[cam] = list(DEFAULT_ROI[cam]); store_settings("roi", S.roi); sync_inhand()
     S.say(f"{cam}: detection area reset"); return status()
 
 
@@ -429,6 +529,164 @@ def clear_background():
     for k in CAMS:
         (DATA / k / "background.png").unlink(missing_ok=True); S.bg[k] = None
     S.say("backgrounds cleared: using colour detection until you press B with the area empty"); return status()
+
+
+# ---------------------------------------------------------------- front depth: close range, auto-tune
+TUNE = {"running": False, "last": None}
+TUNE_LOCK = threading.Lock()
+JOBS = {}          # set in __main__: {"arm": ARM, "collector": ..., "sorter": ...} (read-only use: their busy flags)
+
+
+def _front():
+    c = S.cams.get("front") if S else None
+    return c if c is not None and hasattr(c, "depth_info") and c.depth_info() else None
+
+
+def _busy():
+    """Names of jobs that move the arm or take photos right now (an auto-tune or depth reset must not overlap)."""
+    out = []
+    for name, key, flag in (("an arm routine", "arm", "running"), ("collection", "collector", "active"), ("the sorter", "sorter", "active")):
+        o = JOBS.get(key)
+        if o is not None and getattr(o, flag, False): out.append(name)
+    return out
+
+
+def _front_depth_cfg():
+    v = load_settings().get("front_depth")
+    return dict(v) if isinstance(v, dict) else {}
+
+
+def sync_inhand():
+    """Give prep.inhand_mask the station's search area (front detection area), colour focal length, the held-object
+    distance limit and the held-brick distance found by the auto-tune. Every in-hand mask (training crops, live
+    sorting, the live view) uses these."""
+    if S is None: return
+    c = _front(); di = c.depth_info() if c else {}
+    cfg = rs_depth.resolve_config(_front_depth_cfg())
+    prep.configure_inhand(roi=list(S.roi["front"]), fx=float(di.get("fx_color") or 1380.0), expect_z_mm=cfg.get("expect_z_mm"),
+                          max_obj_mm=cfg.get("max_obj_mm"))
+
+
+def _probe_mask(d):
+    return prep.inhand_mask(d, expect_z_mm=None)      # the auto-tune must not be biased by the previous result
+
+
+def _fresh_depths(c, n, timeout=4.0):
+    """n depth frames produced after now (the first one after a table change is skipped: it may be in flight)."""
+    time.sleep(0.3); n0 = c.depth_n; last = n0; out = []; t0 = time.time()
+    while len(out) < n and time.time() - t0 < timeout:
+        if c.depth_n != last:
+            last = c.depth_n
+            if last > n0 + 1 and c.depth is not None: out.append(c.depth)
+        time.sleep(0.02)
+    return out
+
+
+def _has_intrinsics(di):
+    return bool(di.get("fx_depth")) and bool(di.get("baseline_mm"))
+
+
+@app.get("/depth/status")
+def depth_status():
+    """Front depth: resolution, disparity shift, measurable window, live valid fraction in the detection area and the
+    held cluster's distance; mask_ok/mask_why = what an in-hand photo taken now would get."""
+    c = _front()
+    if c is None: return {"available": False, "msg": "front depth camera not available"}
+    dep = c.depth if c.depth_t and time.time() - c.depth_t < 1.0 else None
+    st = rs_depth.measure(dep, S.roi["front"], _probe_mask)
+    m, why = prep.inhand_mask(dep) if dep is not None else (None, "no fresh depth")
+    return {"available": True, **c.depth_info(), "roi": S.roi["front"],
+            "age_s": round(time.time() - c.depth_t, 2) if c.depth_t else None,
+            "valid_roi": st["valid_roi"], "z_mm": st["z_mm"], "object_px": st["object_px"],
+            "mask_ok": m is not None, "mask_why": None if m is not None else why,
+            "inhand": dict(prep.INHAND), "tuning": TUNE["running"], "last_tune": TUNE["last"], "busy": _busy()}
+
+
+@app.post("/depth/autotune")
+def depth_autotune(shifts: str = "", frames: int = 3):
+    """Hold a brick at a WP2 photo pose, then call this: sweeps disparity shifts live, measures the held cluster
+    (pixels with real depth, its distance) and the valid fraction in the front detection area per shift, keeps the
+    middle of the best plateau of the NEAREST cluster (rs_depth.pick_shift), stores shift + cluster distance in
+    cam_settings.json ("front_depth") and applies it. shifts="0,40,80" overrides the sweep.
+    Exclusive: refused while an arm routine, collection or the sorter runs; while it runs it holds the arm's busy flag
+    (so none of them can start) and prep.TUNING (photos taken anyway are not masked)."""
+    c = _front()
+    if c is None: return {"ok": False, "msg": "front depth camera not available"}
+    di = c.depth_info()
+    if not di.get("enabled"):
+        return {"ok": False, "msg": f"front depth stream is off: {di.get('warning') or 'see the restart log'}", "depth": di}
+    if not di.get("advanced"):
+        return {"ok": False, "msg": "advanced mode is off on the front camera (see warning): can't change the disparity "
+                                    "shift. Check the log of the last restart.", "depth": di}
+    if not _has_intrinsics(di):
+        return {"ok": False, "msg": "depth intrinsics/baseline unknown (see warning): can't compute the depth window", "depth": di}
+    fx, B = di["fx_depth"], di["baseline_mm"]
+    try: cands = sorted({int(min(rs_depth.SHIFT_MAX, max(0, int(x)))) for x in shifts.split(",") if x.strip()})
+    except ValueError: return {"ok": False, "msg": "shifts must be integers, e.g. 0,40,80"}
+    cands = cands or rs_depth.candidate_shifts(fx, B)
+    if not TUNE_LOCK.acquire(blocking=False): return {"ok": False, "msg": "auto-tune already running"}
+    arm = JOBS.get("arm"); claimed = False
+    try:
+        busy = _busy()
+        if busy: return {"ok": False, "msg": f"busy: {', '.join(busy)} is running. Stop it, hold the brick at WP2, then tune."}
+        if arm is not None: arm.running = True; claimed = True     # sorter/collector/arm runs refuse to start now
+        TUNE["running"] = True; prep.TUNING = True
+        orig, roi, results = di["shift"], list(S.roi["front"]), []
+        try:
+            for sh in cands:
+                got = c.set_shift(sh)
+                ms = [rs_depth.measure(d, roi, _probe_mask) for d in _fresh_depths(c, max(1, min(10, frames)))]
+                if not ms: results.append({"shift": got, **rs_depth.window_info(fx, B, got), "masked": False, "why": "no depth frames"}); continue
+                r = sorted(ms, key=lambda x: x["object_px"])[len(ms) // 2]          # median frame by score
+                results.append({**r, **rs_depth.window_info(fx, B, got)})
+            best = rs_depth.pick_shift(results)
+            if best is None:
+                c.set_shift(orig); _fresh_depths(c, 1)
+                out = {"ok": False, "msg": "no disparity shift gave a usable in-hand mask: hold a brick at a WP2 photo pose "
+                                           f"(in the front detection area) and try again. Shift back to {orig}.",
+                       "results": results, "depth": c.depth_info()}
+            else:
+                c.set_shift(best["shift"]); _fresh_depths(c, 1)          # status/photos right after see the new window
+                cfg = _front_depth_cfg()
+                cfg.update({"width": di["width"], "height": di["height"], "shift": best["shift"], "expect_z_mm": best["z_mm"],
+                            "tuned_at": datetime.now().isoformat(timespec="seconds"),
+                            "tuned_near_mm": best["near_mm"], "tuned_far_mm": best["far_mm"]})
+                store_settings("front_depth", cfg)
+                c.dinfo["expect_z_mm"] = best["z_mm"]; sync_inhand()
+                out = {"ok": True, "msg": f"depth tuned: shift {best['shift']} measures {best['near_mm']}-{best['far_mm'] or 'inf'} mm, "
+                                          f"held cluster at {best['z_mm']} mm, {best['valid_roi']:.0%} of the detection area has depth",
+                       "best": best, "results": results, "depth": c.depth_info()}
+        except Exception as e:
+            try: c.set_shift(orig)
+            except Exception: pass
+            out = {"ok": False, "msg": f"auto-tune failed: {e}", "results": results}
+    finally:
+        TUNE["running"] = False; prep.TUNING = False
+        if claimed: arm.running = False
+        TUNE_LOCK.release()
+    TUNE["last"] = {k: out.get(k) for k in ("ok", "msg", "best")}
+    S.say(out["msg"], out["ok"])
+    return out
+
+
+@app.post("/depth/reset")
+def depth_reset():
+    """Forget the auto-tune (shift from "near_mm" or 0 again, no expected distance). For a re-taught WP2.
+    Refused while the auto-tune, an arm routine, collection or the sorter runs (it changes the live depth window)."""
+    if TUNE["running"]: return {**depth_status(), "ok": False, "msg": "depth auto-tune running"}
+    busy = _busy()
+    if busy: return {**depth_status(), "ok": False, "msg": f"busy: {', '.join(busy)} is running"}
+    c = _front()
+    cfg = _front_depth_cfg()
+    for k in ("shift", "expect_z_mm", "tuned_at", "tuned_near_mm", "tuned_far_mm"): cfg.pop(k, None)
+    store_settings("front_depth", cfg)
+    if c is not None:
+        di = c.depth_info(); c.dinfo["expect_z_mm"] = None
+        if di.get("advanced"):
+            c.set_shift(rs_depth.initial_shift(rs_depth.resolve_config(cfg), di.get("fx_depth"), di.get("baseline_mm"))[0])
+            _fresh_depths(c, 1)
+    sync_inhand(); S.say("front depth tuning reset")
+    return {**depth_status(), "ok": True}
 
 
 @app.post("/save/{label}")
@@ -715,6 +973,7 @@ def root():
 if __name__ == "__main__":
     DATA.mkdir(parents=True, exist_ok=True)
     S = State()
+    sync_inhand()
     A = None   # auto-capture removed: capture only happens on a click/key press
 
     def say_recent(caption, img):
@@ -732,6 +991,7 @@ if __name__ == "__main__":
         import sorter
         srouter = sorter.make_router(S, ARM, ACTX, crouter.collector, DATA, ROOT)
         app.include_router(srouter)
+        JOBS.update(arm=ARM, collector=crouter.collector, sorter=srouter.sorter)    # depth auto-tune exclusivity
         if MOCK: mock_hw.attach(app, S, ARM, crouter.collector, srouter.sorter)
         print(f"control UI: http://127.0.0.1:{PORT}/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
     except Exception as e:

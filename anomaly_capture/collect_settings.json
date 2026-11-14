@@ -1,0 +1,30 @@
+{
+ "home": "home",
+ "wp1": "wp1",
+ "wp2": "wp2",
+ "drops": "drops",
+ "phase2": false,
+ "regrasp": false,
+ "speed": 0.8,
+ "roll_jitter": 45,
+ "act_roi": {
+  "top": [
+   388,
+   113,
+   1677,
+   1080
+  ],
+  "wrist": [
+   0,
+   0,
+   1920,
+   1080
+  ],
+  "front": [
+   0,
+   0,
+   1920,
+   1080
+  ]
+ }
+}

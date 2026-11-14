@@ -43,6 +43,7 @@ ENGAGE_VMAX = 250    # first 3 s of mirroring: creep to the leader's pose instea
 TOL = 40             # ticks (~3.5 deg): "arrived" for body joints (P-gain 16 leaves some gravity sag)
 BLOCKED = 160        # ticks (~14 deg): still this far off after settling = something is in the way -> stop
 TICK_PER_DEG = 4096 / 360
+EDIT_BUSY = "the arm is running a routine / collection / sort: STOP it first, then change waypoints"   # poses in use
 
 
 def _open(serial):
@@ -297,6 +298,7 @@ def make_router(S, DATA, AVG, say_recent):
     @r.post("/arm/routine/delete")
     def delete_routine():
         def f():
+            if A.running: raise RuntimeError(EDIT_BUSY)
             n = R["cur"]; R["routines"].pop(n, None); store_routines(R["routines"])
             R["cur"] = next(iter(R["routines"]), None); return f"routine '{n}' deleted"
         return act(f)
@@ -305,6 +307,7 @@ def make_router(S, DATA, AVG, say_recent):
     def add(capture: bool = False, routine: str = "", single: bool = False):
         def f():
             if not A.f: raise RuntimeError("connect the arm first")
+            if A.running: raise RuntimeError(EDIT_BUSY)
             w = wps(routine, create=True)
             pose = {"name": routine if single else (f"{routine}-{len(w) + 1}" if routine else f"{'cam' if capture else 'p'}{len(w) + 1}"),
                     "pos": A.teach_pose(), "capture": capture}
@@ -319,6 +322,7 @@ def make_router(S, DATA, AVG, say_recent):
         def f():
             w = wps(routine)
             if not 0 <= i < len(w): raise RuntimeError("no such waypoint")
+            if A.running and op in ("delete", "update", "up", "down"): raise RuntimeError(EDIT_BUSY)
             if op == "delete": w.pop(i)
             elif op == "update":
                 if not A.f: raise RuntimeError("connect the arm first")
@@ -356,6 +360,11 @@ def make_router(S, DATA, AVG, say_recent):
             p = d / f"{group}_{brick or 'nobrick'}_{view}.png"; cv2.imwrite(str(p), f); files.append(p)
             motion = float(np.abs(cv2.blur(first, (5, 5)) - cv2.blur(last, (5, 5))).mean())
             dep = getattr(S.cams[k], "depth", None); dinfo = None
+            dcfg = S.cams[k].depth_info() if kind == "inhand" and hasattr(S.cams[k], "depth_info") else None   # provenance
+            if kind == "inhand" and dcfg is not None:          # why there is no mask, instead of a silent None
+                if prep.TUNING: dep, dinfo = None, "depth auto-tune running"
+                elif dep is None: dinfo = "no depth"
+                elif time.time() - S.cams[k].depth_t >= 1.0: dinfo = f"stale depth ({time.time() - S.cams[k].depth_t:.1f} s old)"
             if dep is not None and time.time() - S.cams[k].depth_t >= 1.0: dep = None
             if kind == "release":
                 crop, cinfo = prep.release_crop(f, k)             # the exact anomaly-model input (sorter.py uses the same)
@@ -375,6 +384,9 @@ def make_router(S, DATA, AVG, say_recent):
                                     "routine": R["cur"], "joints": {n: int(x) for n, x in A.pos.items()},
                                     "motion": round(motion, 2), "frames_averaged": AVG[k], "time": group,
                                     "depth": dinfo if isinstance(dinfo, dict) else None,
+                                    "depth_mask_why": dinfo if isinstance(dinfo, str) else None,
+                                    "depth_cfg": dcfg,
+                                    "inhand_cfg": (cinfo.get("inhand_cfg") or dict(prep.INHAND)) if kind == "inhand" else None,
                                     "cam_settings": S.cams[k].settings}) + "\n")
             say_recent(f"{k} · {view}", f)
         S.saved.append((files, len(files)))

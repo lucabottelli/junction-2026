@@ -49,14 +49,33 @@ function show(c){const r=pending||roiTop(c),known=!!(c&&c.cfg),isF=full(r),busy=
  let st2='todo';try{st2=journey().crop.st}catch(_){st2=known&&!isF?'done':'todo'}
  try{setH('cr-st',statusBadge(st2))}catch(_){}}
 
+/* front depth: live window + mask state (GET /depth/status), and the auto-tune (POST /depth/autotune, brick held at WP2) */
+let tuning=false;
+function depthLine(d){if(!d||!d.available)return '<span class=warn>Depth · front depth camera not available</span>';
+ const win=`${d.near_mm??'?'}–${d.far_mm==null?'∞':d.far_mm} mm`;
+ const head=`Depth · ${d.width}×${d.height}, shift ${d.shift}, measures <b>${win}</b>`;
+ const m=d.mask_ok?`<span class=ok>mask at ${d.z_mm??'?'} mm</span>`:`<span class=warn>no mask</span> · ${esc(d.mask_why||'')}`;
+ return head+'<br>'+m+` · ${Math.round((d.valid_roi||0)*100)}% of the area has depth`+(d.warning?`<br><span class=warn>${esc(d.warning)}</span>`:'')}
+function depthPoll(){const sec=el('p-crop');if(!sec||sec.offsetParent===null||tuning)return;
+ getJ('/depth/status').then(d=>setH('cr-dstat',depthLine(d))).catch(()=>{})}
+async function depthTune(){if(tuning)return;
+ if(!await ask('Auto-tune the front depth?','Hold a brick at a WP2 photo pose first. The depth window is swept for about 5 seconds; nothing moves.','Auto-tune'))return;
+ tuning=true;const b=el('cr-dtune');if(b)b.disabled=true;setH('cr-dstat','<span class=spin style="width:10px;height:10px"></span> Tuning the depth window…');
+ try{const x=await fetch('/depth/autotune',{method:'POST'});if(!x.ok)throw new Error(x.status+' '+x.statusText);
+  const r=await x.json();toast(r.msg||'done',r.ok?'ok':'err')}
+ catch(e){toast('Auto-tune failed: '+e.message,'err')}
+ finally{tuning=false;if(b)b.disabled=false;depthPoll()}}
+
 PAGE.crop={
  init(){const box=el('cropbox');if(!box)return;
   box.addEventListener('pointerdown',down);box.addEventListener('pointermove',move);box.addEventListener('pointerup',up);
   box.addEventListener('pointercancel',endDrag);box.addEventListener('lostpointercapture',()=>{if(st)endDrag()});   // never commit a box on a lost capture
   box.addEventListener('dragstart',e=>e.preventDefault());
   const rb=el('cr-reset');if(rb)rb.addEventListener('click',reset);
+  const tb=el('cr-dtune');if(tb)tb.addEventListener('click',depthTune);
   show(C)},
- show(){lastSig='';show(C)},
+ show(){lastSig='';show(C);depthPoll()},
+ slow(){depthPoll()},
  hide(){endDrag()},
  col(c){show(c)},
 };

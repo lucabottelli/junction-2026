@@ -84,6 +84,7 @@ models and training (`train_anomaly.py`); the ACT policy. Timing is real-time (m
 | `test_mock_simtest.py` | `anomaly_capture/sim_test.py` (on a copy, see below) | fast |
 | `test_mock_flows_collect.py` | record episodes, keep/untick, export preview, phase 2 photos + tape re-grip, test buttons, discard + NEXT, STOP mid-pick and recovery | slow |
 | `test_mock_flows_sort.py` | inspect & sort: manual and model judge, clean / front / finger-side / top defects, STOP mid-cycle, dropped brick, failed re-grip | slow |
+| `test_regrip.py` | tape re-grip: computed vs taught `tape_regrip` pose, roll limits, a pose not turned ~90° refused, retry + reasons, contact detection, STOP at every move, step-by-step test (NEXT, timeout, STOP) and its `runs/regrip_test_*` files, coverage with a taught pose either way; the same on the mock station | fast + slow |
 | `test_ui_smoke.py` + `ui_smoke.mjs` | Chromium loads every page, fails on console errors, exceptions, failed requests or HTTP errors, clicks the main buttons of each step, saves screenshots | ui |
 
 `tests/conftest.py` starts one mock server per test module (free port, temp data root). The UI smoke test needs

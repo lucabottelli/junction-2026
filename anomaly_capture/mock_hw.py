@@ -612,13 +612,66 @@ class Renderer:
 RENDER = Renderer()
 
 
+def _rs_depth():
+    """anomaly_capture/rs_depth.py (imported lazily: tests load this module by path, without sys.path)."""
+    if "rs_depth" in sys.modules: return sys.modules["rs_depth"]
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rs_depth", HERE / "rs_depth.py")
+    mod = importlib.util.module_from_spec(spec); sys.modules["rs_depth"] = mod; spec.loader.exec_module(mod)
+    return mod
+
+
+MOCK_BASELINE_MM = 55.0       # D415 stereo baseline
+MOCK_FX_PER_W = 0.72          # depth focal length / depth width (D415: ~920 px at 1280, ~305 at 424)
+
+
 class FakeCam:
-    """Stands in for capture.RSCam / WristCam: read() -> BGR 1920x1080 at ~30 fps; front also has .depth (mm)."""
+    """Stands in for capture.RSCam / WristCam: read() -> BGR 1920x1080 at ~30 fps; front also has .depth (mm).
+    The front camera also emulates the D415's measurable depth window (capture.open_cam calls configure_depth):
+    Min-Z / far limit follow the configured resolution and disparity shift (rs_depth.depth_window), pixels outside
+    the window have no depth (0). At 1280x720 the WP2 brick (~35 cm) is inside Min-Z, like on the station."""
     def __init__(self, name):
-        self.name = name; self.n = 0; self.depth, self.depth_t = None, 0.0
+        self.name = name; self.n = 0; self.depth, self.depth_t, self.depth_n = None, 0.0, 0
         self.settings = {"mock": True, "exposure": 166, "gain": 64.0, "white_balance": 4500}
         self._next = time.time(); self._key = None; self._img = None; self._dep = None
+        self.dinfo = None; self._win = (0.0, math.inf); self._wcache = (None, None)
         print(f"{name} camera locked (mock):", self.settings)
+
+    def configure_depth(self, cfg):
+        """cfg = rs_depth.resolve_config(...): fake intrinsics for the chosen resolution, initial shift."""
+        rd = _rs_depth(); w, h = cfg["width"], cfg["height"]
+        fx = round(MOCK_FX_PER_W * w, 2)
+        shift, note = rd.initial_shift(cfg, fx, MOCK_BASELINE_MM)
+        adv = bool(cfg.get("advanced", True))
+        self.dinfo = {"enabled": True, "width": w, "height": h, "fps": cfg["fps"], "advanced": adv, "fx_depth": fx,
+                      "baseline_mm": MOCK_BASELINE_MM, "fx_color": 1380.0, "expect_z_mm": cfg.get("expect_z_mm"),
+                      "max_obj_mm": cfg.get("max_obj_mm"),
+                      "warning": "; ".join(w for w in (cfg.get("config_warning"), None if adv or not shift else
+                                                       f"wanted disparity shift {shift} ({note}) but advanced mode is off: using 0") if w) or None,
+                      "mock": True}
+        self._apply(shift if adv else 0)
+
+    def _apply(self, shift):
+        rd = _rs_depth(); d = self.dinfo
+        d.update(rd.window_info(d["fx_depth"], d["baseline_mm"], shift))
+        self._win = rd.depth_window(d["fx_depth"], d["baseline_mm"], d["shift"])
+
+    def depth_info(self):
+        return dict(self.dinfo) if self.dinfo else None
+
+    def set_shift(self, shift):
+        if not (self.dinfo and self.dinfo.get("advanced")): raise RuntimeError("advanced mode is off (mock)")
+        self._apply(int(min(_rs_depth().SHIFT_MAX, max(0, int(shift)))))
+        return self.dinfo["shift"]
+
+    def _windowed(self):
+        """The rendered depth with everything outside the camera's measurable window set to 0 (cached)."""
+        if self.dinfo is None or self._dep is None: return self._dep
+        key = (self._key, self._win)
+        if self._wcache[0] != key:
+            near, far = self._win; d = self._dep
+            self._wcache = (key, np.where((d >= near) & (d <= far), d, 0).astype(np.uint16))
+        return self._wcache[1]
 
     def read(self):
         st = WORLD.cam_state.get(self.name, "ok")
@@ -633,7 +686,7 @@ class FakeCam:
         if key != self._key:
             self._img, self._dep = RENDER.render(self.name, fp, bs, want_depth=depth_cam); self._key = key
         self.n += 1
-        if depth_cam and self.n % 3 == 0: self.depth, self.depth_t = self._dep, time.time()
+        if depth_cam and self.n % 3 == 0: self.depth, self.depth_t = self._windowed(), time.time(); self.depth_n += 1
         if not depth_cam: self.depth = None
         return self._img
 

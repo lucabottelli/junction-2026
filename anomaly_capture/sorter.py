@@ -317,15 +317,38 @@ class Sorter:
 
     # ------------------------------------------------------------------ inspection of the whole surface
     def inspect(self, g_lock, g_open, cycle_dir):
+        """The tape poses are frozen (and validated) once per cycle, before anything is set down: every re-grip of the
+        cycle turns the same way, and an unusable / missing pose means "no re-grip" (fail-safe), not a stopped run."""
+        C = self.C; tape_err = None
+        if self.tape_ok():
+            try: C.freeze_tape()
+            except Exception as e: tape_err = str(e) or type(e).__name__
+        try: return self._inspect(g_lock, g_open, cycle_dir, tape_err)
+        finally: C.thaw_tape()
+
+    def _inspect(self, g_lock, g_open, cycle_dir, tape_err=None):
         C = self.C; p = self.params()
         wp1 = C.wps("wp1")[0]["pos"]; wp2 = self.wp2(); poses = self.poses()
-        release = self.release_on(); maxk = p["max_regrasps"] if self.tape_ok() else 0
-        seen = cov.Seen(); steps = []; k = 0
+        can_tape = self.tape_ok() and not tape_err
+        release = self.release_on() and can_tape; maxk = p["max_regrasps"] if can_tape else 0
+        seen = cov.Seen(); steps = []; k = 0; regrips = []; retried = []
         self.cur.update({"steps": steps, "regions": seen.regions(), "grip": 1, "seen_pct": 0})
 
         def result(verdict, reason, **kw):
             return {"verdict": verdict, "reason": reason, "steps": steps, "regions": seen.regions(),
-                    "seen_pct": round(100 * seen.fraction(), 1), "regrasps": k, "g_lock": g_lock, **kw}
+                    "seen_pct": round(100 * seen.fraction(), 1), "regrasps": k, "g_lock": g_lock,
+                    "regrip_log": regrips, **kw}
+
+        def regrip(turned):
+            """collect.regrip (one retry that first lets go and lifts) -> (held, clamp, why-text of the failed attempts).
+            Any other motion error after the release (the object lies on the tape) -> not held, with the error."""
+            try:
+                ok, g, whys = C.regrip(g_open, turned=turned)
+                fail = C.why_text(whys)
+            except RuntimeError as e:
+                ok, g, fail = False, None, f"{C.sub or 'start'}: {e}"
+            regrips.append(dict(C.regrip_info or {}))
+            return ok, g, fail
 
         def why(rec):
             w = "defect seen" if rec["decision"] == "defect" else "uncertain after retakes (fail-safe)"
@@ -356,11 +379,16 @@ class Sorter:
                 clean(sides, True)
             if at_wp2: C.up_wp2(wp1, wp2, g_lock)
             if seen.complete():
-                return result("good", f"whole surface seen clean ({len(steps)} photos, {k} re-grip{'s' * (k != 1)})")
+                done = f"{len(steps)} photos, {k} re-grip{'s' * (k != 1)}"
+                if retried:                  # a failed attempt may have spun / tipped it: the coverage can't be trusted
+                    return result("defect", f"defect plate: re-grip {', '.join(map(str, retried))} needed a retry, "
+                                            f"orientation not verified (every photo was clean: {done})", orientation_unverified=True)
+                return result("good", f"whole surface seen clean ({done})")
             if k >= maxk or not cov.potential(seen, poses, k + 1, maxk, release, p):
                 miss = seen.missing()
-                return result("defect", f"{', '.join(miss)} can't be seen by any pose: not verifiable (fail-safe)",
-                              unverified=miss)
+                return result("defect", f"{', '.join(miss)} can't be seen by any pose: not verifiable (fail-safe)"
+                                        + (f" - re-grip not possible: {tape_err}" if tape_err else ""), unverified=miss,
+                              **({"orientation_unverified": True} if retried else {}))
             # ---- tape spot: set down, top photo of the released object, grip again turned 90 deg
             self.state = "regrasp"
             self.say(f"{', '.join(seen.missing())} not fully seen yet: re-grip on the tape spot, turned 90°")
@@ -372,18 +400,17 @@ class Sorter:
                 steps.append(rec)
                 if rec["decision"] != "clean":                    # pick it up again as it lies, to carry it to the plate
                     self.state = "regrasp"
-                    ok, g = C.grip_on_tape(g_open, turned=False)
-                    if not ok: ok, g = C.grip_on_tape(g_open, turned=False)
-                    if not ok: return result("aborted", why(rec) + " - but it could not be picked up again", on_tape=True)
+                    ok, g, fail = regrip(False)
+                    if not ok: return result("aborted", why(rec) + f" - but it could not be picked up again ({fail})", on_tape=True)
                     g_lock = g
                     return result("defect", why(rec))
                 clean(["up"], False)
             self.state = "regrasp"
-            ok, g = C.grip_on_tape(g_open, turned=True)
+            ok, g, fail = regrip(True)
             if not ok:
-                self.say("re-grip missed: trying once more")
-                ok, g = C.grip_on_tape(g_open, turned=True)
-            if not ok: return result("aborted", "re-grip failed twice: object left on the tape spot", on_tape=True)
+                twice = len((regrips[-1] if regrips else {}).get("failed") or []) >= 2
+                return result("aborted", f"re-grip failed{' twice' if twice else ''} ({fail}): object left on the tape spot", on_tape=True)
+            if (C.regrip_info or {}).get("attempts", 1) > 1: retried.append(k + 1)
             g_lock = g; k += 1; self.cur["grip"] = k + 1
 
     # ------------------------------------------------------------------ sorting
@@ -560,6 +587,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
         except Exception as e: return bad(str(e))
         for b in BINS:
             if not C.slot(f"sort_{b}"): return bad(f"teach the {b}-plate pose first")
+        if T.tape_ok() and C.regrip_check(): return bad(C.regrip_check())
         pl = T.plan()
         if not pl["complete"] and not T.cfg["allow_incomplete"]:
             return bad(f"with these poses {', '.join(pl['missing'])} can never be fully seen ({pl['seen_pct']} % of the surface "

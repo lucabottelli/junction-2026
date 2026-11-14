@@ -1,6 +1,8 @@
 /* Step 2: teach the waypoints. Slots = routines in /arm/status `all`; same endpoints as the old page:
    POST /arm/wp/add?routine=N[&single=true][&capture=true]   POST /arm/wp/I/{goto,update,delete}?routine=N
-   POST /collect/test_wp2?kind={wp2,regrasp}                 setMode('mirror') (core) */
+   POST /collect/test_wp2?kind={wp2,regrasp}[&step=true]     setMode('mirror') (core)
+   Re-grip test diagnostics: C.info.regrip (collect.diag_view), frames GET /collect/regrip/frame?i=N&cam=wrist,
+   C.regrip_pose = {taught, above, turn_deg, problem} for the optional tape_regrip slot. */
 (()=>{
 const SLOTS={
  home:{t:'Start pose',s:'Start',single:1,
@@ -24,9 +26,15 @@ const SLOTS={
   how:'A few cm straight above the orange tape spot, holding the brick.'},
  tape_place:{t:'On the tape spot',s:'On tape',single:1,test:['regrasp','Test re-grip'],x:1,
   d:'The brick is released here, the wrist turns 90° and it is gripped again, so the faces under the fingers can be photographed.',
-  how:'Brick (still held) just touching the tape spot.'}};
+  how:'Brick (still held) just touching the tape spot.'},
+ tape_regrip:{t:'Re-grip pose',s:'Re-grip',single:1,opt:1,
+  d:'Optional. Where the open gripper grips the released brick again, turned 90°. Without it the robot just rolls the wrist 90° at the tape pose, which puts the jaws off-centre: the SO-101 has one fixed jaw, the brick lay against it, not under the wrist axis.',
+  how:'Run “Step by step” on the tape-spot card and press STOP after step 4 (brick released on the tape, gripper open above it). Mirror on, roll the wrist about 90° (either way), open the gripper wide and lower until the jaws straddle the brick at gripping height, the FIXED jaw a few mm from the brick, the moving jaw clear of it. Save. Strict: the roll must be 90° and the pan as in the tape pose, within 5° together (the coverage counts exactly 90°); the card says which joint is off. The gripper value is ignored (it opens wide).'},
+ tape_regrip_above:{t:'Above the re-grip pose',s:'Above re-grip',single:1,opt:1,
+  d:'Optional. The approach to the re-grip pose. Without it the robot uses the re-grip pose at the height of “above the tape spot”, then comes straight down.',
+  how:'From the re-grip pose straight up a few cm, wrist still turned. Only the arm joints are used; the wrist roll is taken from the re-grip pose.'}};
 const JS={shoulder_pan:'Pan',shoulder_lift:'Lift',elbow_flex:'Elbow',wrist_flex:'Wrist',wrist_roll:'Roll',gripper:'Grip'};
-const PH2=['wp2_above','wp2','tape_above','tape_place'];
+const PH2=['wp2_above','wp2','tape_above','tape_place','tape_regrip','tape_regrip_above'];
 
 const wpsOf=n=>{const r=A&&A.all&&A.all[n];return (r&&Array.isArray(r.waypoints))?r.waypoints:[]};
 const cfg=()=>(C&&C.cfg)||{};
@@ -37,6 +45,7 @@ const jtitle=x=>esc(Object.entries((x&&x.pos)||{}).map(([k,y])=>(JS[k]||k)+' '+y
 
 /* ---------- pieces ---------- */
 function badge(n,w){const m=SLOTS[n],req=wpRequired().includes(n);
+ if(!w.length&&m.opt)return `<span class="badge line">Optional</span>`;
  if(w.length)return m.single?`<span class="badge ok">${ico('check')}Taught</span>`:`<span class="badge ok">${w.length} ${m.capture?'pose':'spot'}${w.length>1?'s':''}</span>`;
  return req?`<span class="badge warn">Needed</span>`:`<span class="badge line">Not taught</span>`}
 function acts(n,i,dis){return `<span class=wps-acts>
@@ -55,14 +64,21 @@ function card(n,dis){const m=SLOTS[n],w=wpsOf(n),on=w.length>0;let body='';
   body=(on?`<div class=wps-list>${w.map((x,i)=>`<div class=wps-row title="${jtitle(x)}"><span class="wps-i num">${i+1}</span><span class=wps-nm>${esc(x&&x.name)}</span>${x&&x.capture?`<span class="badge line">${ico('cam')}photo</span>`:''}${hereTag(x)}<span class=spacer></span>${acts(n,i,dis)}</div>`).join('')}</div>`:'')
    +`<div class=wps-foot><button class="btn sm ${on?'':'primary'}" ${dis} onclick="p('/arm/wp/add?routine=${n}${m.capture?'&capture=true':''}')">${ico('save')}${m.capture?'Add photo pose':'Add current pose as a spot'}</button></div>`;
  }
- const test=m.test?`<div class=wps-test><button class="btn sm" ${dis} onclick="p('/collect/test_wp2?kind=${m.test[0]}')" title="Hold a brick first. Runs at ≤ 30 % speed and saves nothing.">${ico('play')}${m.test[1]}</button>
-  <span>Hold a brick first · at most 30 % speed · saves nothing</span></div>`:'';
+ const test=!m.test?'':m.test[0]=='regrasp'?`<div class=wps-test><button class="btn sm" ${dis} onclick="p('/collect/test_wp2?kind=regrasp')" title="Hold a brick first. Runs at ≤ 30 % speed; logs every sub-step to runs/regrip_test_…">${ico('play')}${m.test[1]}</button>
+  <button class="btn sm" ${dis} onclick="p('/collect/test_wp2?kind=regrasp&step=true')" title="Pauses after every sub-step until N (Next). STOP (Space) ends it, the arm holds.">${ico('list')}Step by step</button>
+  <span>Hold a brick first · ≤ 30 % speed · logs each step to <code>runs/</code></span></div>`
+  :`<div class=wps-test><button class="btn sm" ${dis} onclick="p('/collect/test_wp2?kind=${m.test[0]}')" title="Hold a brick first. Runs at ≤ 30 % speed and saves nothing.">${ico('play')}${m.test[1]}</button>
+  <span>Hold a brick first · at most 30 % speed · saves nothing</span></div>`;
+ const rp=(C&&C.regrip_pose)||{};
+ const sg1=x=>x==null?'–':(x>0?'+':'')+Number(x).toFixed(1);
+ const turn=n=='tape_regrip'&&on&&rp.turn_deg!=null?`<p class=wps-how><span>Turn</span>${rp.problem?`NOT USABLE: ${esc(rp.problem)}.`
+  :`Roll ${esc(sg1(rp.turn_deg))}°, pan ${esc(sg1(rp.pan_deg))}° from the tape pose. Used for every re-grip instead of the computed turn${rp.above?'':'; approach from the height of “above the tape spot”'}.`}</p>`:'';
  return `<article class="wps ${on?'on':'empty'}${m.single?'':' multi'}" id="wp-c-${n}">
   <div class=wps-h><span class="rt-dot ${on?'on':''}"></span><h3>${m.t}</h3><code>${n}</code>${m.x?'<span class="badge warn">Experimental</span>':''}<span class=r>${badge(n,w)}</span></div>
   <p class=wps-d>${m.d}</p>
   <p class=wps-how><span>Where</span>${m.how}</p>
   ${m.tip?`<p class=wps-how><span>Best</span>${m.tip}</p>`:''}
-  ${body}${test}</article>`}
+  ${turn}${body}${test}</article>`}
 
 /* ---------- route diagram ---------- */
 function node(n,o){o=o||{};const on=o.on!=null?o.on:wpsOf(n).length>0;
@@ -84,6 +100,7 @@ function route(){const c=cfg(),ph2=!!c.phase2,rg=ph2&&!!c.regrasp,drops=wpsOf('d
 let sig='';
 function render(){
  const s=A;if(!s)return;
+ diag();
  const conn=!!s.connected,mir=s.mode=='mirror',c=cfg(),ph2=!!c.phase2,rg=!!c.regrasp;
  setH('wp-call',!conn?`<div class="callout warn">${ico('plug')}<span>Connect the arm to save or drive to waypoints.</span><a class="btn sm" href="/connect">Connect arm &amp; cameras</a></div>`
   :s.running?`<div class="callout plain">${ico('info')}<span>The arm is moving. Saving and Go are paused until it stops.</span></div>`
@@ -103,7 +120,7 @@ function render(){
   +step('',`<b>Save current pose</b> on that card. To fix it later, move again and press <b>Set</b>. The gripper stored is what it is <i>commanded</i> to, so a held brick keeps its grip.`)
   +step('',`<b>Check it with Go:</b> the follower drives there slowly. Go switches the arm to Hold, so turn Mirror back on before teaching the next pose.`));
  const all=['home','wp1','drops',...PH2];
- const sg=JSON.stringify([all.map(n=>wpsOf(n).map(x=>[x&&x.name,x&&x.pos,x&&x.capture,here(x)])),conn,s.running,ph2,rg,req]);
+ const sg=JSON.stringify([all.map(n=>wpsOf(n).map(x=>[x&&x.name,x&&x.pos,x&&x.capture,here(x)])),conn,s.running,ph2,rg,req,(C&&C.regrip_pose)||null]);
  if(sg==sig)return;sig=sg;
  const dis=!conn||s.running?'disabled':'';
  $('wp-route').innerHTML=route();
@@ -111,6 +128,35 @@ function render(){
  $('wp-opt').innerHTML=card('drops',dis);
  $('wp-ph2').innerHTML=PH2.map(n=>card(n,dis)).join('');
  $('wp-ph2').classList.toggle('off',!ph2)}
+
+/* ---------- re-grip test: the current step and its numbers (C.info.regrip) ---------- */
+const f1=x=>x==null?'–':(x>0?'+':'')+Number(x).toFixed(1);
+function diag(){const el=$('wp-rg');if(!el)return;const d=C&&C.info&&C.info.regrip;
+ if(!d){setH(el,'');return}
+ const rows=d.rows||[],last=rows[rows.length-1],plan=d.plan||[],n=Math.max(plan.length,rows.length);
+ const hold=d.holding==null?'':d.holding?' · holding':' · not holding';
+ const st=d.active?(d.waiting?['Waiting for N','acc']:['Running','info']):d.ok?['Held again','ok']
+  :[(String(d.result||'').startsWith('stopped')?'Stopped':'Failed')+hold,d.holding?'warn':'err'];
+ const big=x=>x!=null&&Math.abs(x)>=3?' class=warn':'';
+ const tr=r=>`<tr class="${last&&r.i==last.i?'wp-rg-cur':''}"><td class=num>${r.i}</td><td>${esc(r.label)}</td>
+  <td class=num>${['shoulder_lift','elbow_flex','wrist_flex'].map(k=>`<span${big(r.lift_err_deg[k])}>${f1(r.lift_err_deg[k])}</span>`).join(' · ')}</td>
+  <td class=num${big(r.max_err_deg)}>${Number(r.max_err_deg).toFixed(1)}</td>
+  <td class=num>${Math.round(r.grip_pct)}${r.stall_pct!=null?` <span class=muted>stall ${Math.round(r.stall_pct)}${r.stall_vs_first!=null?`, ${r.stall_vs_first>0?'+':''}${r.stall_vs_first} vs 1st`:''}</span>`:''}</td>
+  <td>${r.holding?'<span class=ok>yes</span>':'<span class=muted>no</span>'}</td></tr>`;
+ const fr=(last&&last.frames)||[],fw=fr.find(f=>f.endsWith('_wrist.jpg'))||fr[0]||'',cam=fw?fw.replace(/^.*_(\w+)\.jpg$/,'$1'):'wrist';
+ const img=fw?`/collect/regrip/frame?i=${last.i}&cam=${encodeURIComponent(cam)}`:'';
+ setH(el,`<div class="card wp-rg">
+  <div class=ch><h3>${ico('list')}Re-grip test${d.step_mode?' · step by step':''}</h3><span class=r><span class="badge ${st[1]}">${st[0]}</span></span></div>
+  <p class=sub>${last?`Step <b>${last.i}</b>${n?` of ${n}`:''}: ${esc(last.label)}`:'Starting…'}${d.result?` · <b>${esc(d.result)}</b>`:''} · log <code>${esc(d.dir)}</code></p>
+  <div class=wp-rg-body>
+   <figure class=fig><div class="feed r43">${img?`<img src="${img}" alt="" onload="this.dataset.ok=1">`:''}<div class=nofeed>No frame</div></div>
+    <figcaption><b>${esc(cam[0].toUpperCase()+cam.slice(1))}</b><span>${last?'at step '+last.i:''}</span></figcaption></figure>
+   <div class=wp-rg-t><table><thead><tr><th>#</th><th>Step</th><th>Lift · Elbow · Wrist °</th><th>Max °</th><th>Grip %</th><th>Held</th></tr></thead>
+    <tbody>${rows.map(tr).join('')}</tbody></table>
+    <p class=wp-rg-note>Error = actual − taught, in degrees. At “lowered” a large lift or elbow error means the brick is pressed into the table (pose too low) or stopped short. Stall vs 1st: the re-grip width against the first grip, in ticks (2×2: about 0).</p></div>
+  </div>
+  ${d.waiting?`<div class=row><button class="btn primary" onclick="flag('next')">${ico('go')}Next step (N)</button><span class=muted>STOP (Space) ends the test; the arm holds where it is.</span></div>`:''}
+ </div>`)}
 
 async function wpDel(n,i){const m=SLOTS[n]||{t:n};
  if(await ask('Delete this pose?',`The pose will be removed from “${m.t}”. This can't be undone.`,'Delete',true))p(`/arm/wp/${i}/delete?routine=${n}`)}

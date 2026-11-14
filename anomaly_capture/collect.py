@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 import prep
 from arm import BODY, JOINTS, TICK_PER_DEG, Stopped
+from coverage import DEFAULTS as COV_DEFAULTS
 
 FPS = 30
 REC_CAMS = ["top", "wrist", "front"]     # stored per frame; ACT uses top + wrist (see prep.py)
@@ -46,6 +47,32 @@ PUT_PAN_DEG = 5.0        # put-back: shift the block sideways by up to this much
 PUT_MIN_TURN = 0.3       # put-back: turn at least this fraction of roll_jitter, so every episode starts clearly different
 REGRIP_OPEN = 0.9        # gripper opening (fraction of its range) when coming down on the released brick
 REGRIP_SQUEEZE = 80      # ticks the re-grip closes past the width where the fingers stalled on the brick
+RELEASE_TICKS = 200      # set-down: at table height the gripper opens only this far past the brick width (~18 deg of the
+                         # moving jaw), so the jaw lets go without sweeping or tipping the brick; it opens fully once lifted
+LIFT_FIRST = 0.3         # lifting off the tape spot: the first 30 % of the way up runs slowly (nothing is dragged along)
+TURN_TOL_DEG = COV_DEFAULTS["margin_deg"]   # a taught tape_regrip must turn exactly 90 deg up to this (|roll err| + |pan
+                         # change|): coverage.py credits every re-grip as exactly 90 deg with only this margin, more would
+                         # credit directions that were really under the fingers
+STEP_TIMEOUT_S = 120     # step-by-step re-grip test: no NEXT for this long -> the test stops, the arm holds (loaded, squeezing)
+TAPE_SLOTS = ("tape_above", "tape_place", "tape_regrip", "tape_regrip_above")
+DIAG_CAMS = ("wrist", "top")     # frames saved at every sub-step of the re-grip test
+REGRIP_STEPS = {         # sub-steps of the tape set-down + re-grip (failure reasons and the step-by-step test name them)
+    "above_tape": "above the tape spot, holding the brick",
+    "lowered": "lowered: brick on the tape, still held",
+    "released": "released: gripper opened a little at table height",
+    "lifted": "lifted: straight up, brick left on the tape, gripper open",
+    "turned_above": "turned 90° above the brick, gripper wide open",
+    "above_open": "above the brick, gripper wide open (not turned)",
+    "lowered_open": "lowered open: the jaws should straddle the brick",
+    "closed": "closed until the fingers stalled, then squeezed",
+    "lifted_held": "lifted straight up with the brick",
+    "reopened": "not held: reopened at table height and lifted",
+}
+REGRIP_PLAN = ("above_tape", "lowered", "released", "lifted", "turned_above", "lowered_open", "closed", "lifted_held")
+
+
+class StepTimeout(Stopped):
+    """Step-by-step re-grip test: no NEXT in time. Handled exactly like STOP (the arm holds where it is)."""
 
 
 class GraspDetector:
@@ -103,7 +130,10 @@ class Collector:
         self.EP = ROOT / "episodes"; self.EP.mkdir(exist_ok=True)
         self.cfg_path = Path(__file__).resolve().parent / "collect_settings.json"
         self.cfg = {"home": "home", "wp1": "wp1", "wp2": "wp2", "drops": "drops", "phase2": False, "regrasp": False, "speed": 0.5, "roll_jitter": 90, "lift_frac": LIFT_FRAC,
-                    "act_roi": {k: prep.default_act_roi(k) for k in REC_CAMS}}
+                    "act_roi": {k: prep.default_act_roi(k) for k in REC_CAMS},
+                    # tape re-grip: opening past the brick width at release, optional contact detection from the following
+                    # error of the lift joints when the open gripper comes down (deg; 0 = off), step-mode timeout
+                    "release_ticks": RELEASE_TICKS, "regrip_contact_deg": 0.0, "step_timeout_s": STEP_TIMEOUT_S}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
         self.state, self.msg, self.ok = "idle", "ready: name the block and press Start", True
@@ -113,6 +143,12 @@ class Collector:
         self.session = None; self.n_done = 0; self.target = 0; self.rec = None
         self.fails = 0; self.attempt = 0   # failed episodes in this run (paused for N, run continues) · episode number being attempted
         self.g_relock = None      # clamp command after the last tape re-grip (grip_on_tape)
+        self.RUNS = ROOT / "runs"  # re-grip test diagnostics: runs/regrip_test_<time>/
+        self.sub = None           # last finished sub-step of the tape set-down / re-grip (failure reasons name it)
+        self.diag = None          # the last re-grip test: {dir, step_mode, active, waiting, i, rows, result, ...}
+        self.regrip_info = None   # what the last regrip() did (the sorter logs it)
+        self._tgt = None          # target of the last goto() (diagnostics: target vs actual)
+        self._tape_snap = None    # tape slots frozen for one cycle / test / episode (freeze_tape): one turn direction
 
     def save_cfg(self): self.cfg_path.write_text(json.dumps(self.cfg, indent=1))
 
@@ -160,7 +196,8 @@ class Collector:
     def goto(self, pos, speed=None, **override):
         tgt = {k: float(v) for k, v in pos.items()}; tgt.update(override)
         for n in JOINTS: tgt[n] = min(self.A.fl[n][1], max(self.A.fl[n][0], tgt[n]))
-        self.A.goto(tgt, speed or self.cfg["speed"])
+        self._tgt = tgt
+        return self.A.goto(tgt, speed or self.cfg["speed"])
 
     def hold_here(self):
         """Stop following the leader; keep the commanded gripper (= keep squeezing the brick)."""
@@ -180,44 +217,296 @@ class Collector:
         r = self.ctx.R["routines"].get(name)
         return r["waypoints"] if r else []
 
-    def place_on_tape(self, g_lock, g_open):
-        """Gently set the held brick down on the tape spot and let go; ends above the spot, gripper open."""
-        above = self.slot("tape_above")[0]["pos"]; place = self.slot("tape_place")[0]["pos"]; A = self.A
-        self.goto(above, gripper=g_lock)
-        self.goto(place, self.cfg["speed"] * 0.3, gripper=g_lock)          # slow, straight down = gentle
-        self.goto(dict(A.cmd), 0.3, gripper=g_open); time.sleep(0.2)       # open slowly
-        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_open)
+    # ------------------------------------------------------------------ tape spot: set down + 90 deg re-grip
+    def tslot(self, name):
+        """A tape slot: the frozen copy while a cycle / test / episode runs (freeze_tape), else the live one."""
+        if self._tape_snap is not None: return self._tape_snap.get(name) or []
+        return self.slot(name)
 
-    def grip_on_tape(self, g_open, turned=True):
-        """Grip the brick that lies released on the tape spot (the arm is above it, gripper open), then lift.
-        turned=True: wrist turned 90 deg first, so the faces that were under the fingers become visible.
-        Works for any brick width: opens wide, closes until the fingers STALL on the brick, then squeezes a fixed
-        amount past that width (a long brick turned 90 deg is much wider than it was in the first grip).
-        Returns (held, clamp command to keep using)."""
-        A = self.A
-        above = self.slot("tape_above")[0]["pos"]; place = self.slot("tape_place")[0]["pos"]
+    def freeze_tape(self):
+        """Copy the tape slots once per inspect cycle / re-grip test / collection episode and validate them BEFORE the
+        brick is set down (raises RuntimeError: nothing has moved yet). Every re-grip of the cycle then uses the same
+        poses, so the turn direction can't change mid-cycle (coverage.py assumes it doesn't)."""
+        self._tape_snap = None
+        snap = {n: json.loads(json.dumps(self.slot(n))) for n in TAPE_SLOTS}
+        self._tape_snap = snap
+        try:
+            self.regrip_poses(False); self.regrip_poses(True)
+        except Exception:
+            self._tape_snap = None; raise
+
+    def thaw_tape(self): self._tape_snap = None
+
+    def regrip_check(self):
+        """None if the tape spot + re-grip poses are usable as taught now, else why not (for the START checks)."""
+        if self._tape_snap is not None: return None
+        try:
+            self.regrip_poses(False); self.regrip_poses(True); return None
+        except (RuntimeError, IndexError, KeyError) as e:
+            return str(e) if not isinstance(e, IndexError) else "teach the tape spot (above + on) first"
+
+    def tape_poses(self):
+        """(above, place) of the tape spot as taught (raises IndexError if not taught)."""
+        return self.tslot("tape_above")[0]["pos"], self.tslot("tape_place")[0]["pos"]
+
+    def regrip_turn(self):
+        """Change of the taught tape_regrip vs tape_place in degrees: {"roll", "pan"} (None if either is not taught).
+        With the gripper pointing down, shoulder_pan turns the gripper about (nearly) the same vertical axis as the
+        wrist roll, so the effective turn is roll +- pan (the sign depends on the servo directions)."""
+        rg, pl = self.tslot("tape_regrip"), self.tslot("tape_place")
+        if not (rg and pl): return None
+        d = lambda n: (rg[0]["pos"][n] - pl[0]["pos"][n]) / TICK_PER_DEG
+        return {"roll": d("wrist_roll"), "pan": d("shoulder_pan")}
+
+    def regrip_turn_deg(self):
+        t = self.regrip_turn(); return None if t is None else t["roll"]
+
+    def regrip_problem(self):
+        """Why the taught tape_regrip can't be used (None = fine or not taught). Fail-safe: coverage.py credits every
+        re-grip as EXACTLY 90 deg (either direction) with a margin of only margin_deg, so the worst-case real turn,
+        | |roll| - 90 | + |pan|, must stay within it; otherwise directions that were really under the fingers would be
+        credited as seen and a defect there could reach the good plate."""
+        t = self.regrip_turn()
+        if t is None: return None
+        er, ep = abs(abs(t["roll"]) - 90), abs(t["pan"])
+        if er + ep <= TURN_TOL_DEG: return None
+        parts = []
+        if er >= 0.05: parts.append(f"wrist roll {t['roll']:+.1f}° from tape_place ({er:.1f}° off 90°)")
+        if ep >= 0.05: parts.append(f"shoulder pan {t['pan']:+.1f}° from tape_place (pan also turns the gripper)")
+        return (f"the taught re-grip pose (tape_regrip) is not a clean 90° turn: {'; '.join(parts)}; together "
+                f"{er + ep:.1f}°, allowed {TURN_TOL_DEG:g}° (the coverage margin). Re-teach it (roll exactly ±90°, pan as "
+                f"in tape_place), or delete it to use the computed turn")
+
+    def regrip_status(self):
+        t = self.regrip_turn()
+        return {"taught": bool(self.tslot("tape_regrip")), "above": bool(self.tslot("tape_regrip_above")),
+                "turn_deg": None if t is None else round(t["roll"], 1), "pan_deg": None if t is None else round(t["pan"], 1),
+                "problem": self.regrip_problem()}
+
+    def regrip_poses(self, turned=True):
+        """(approach from above, grip pose, how) for gripping the brick that lies released on the tape spot.
+          turned=False            -> tape_above / tape_place as taught ("as placed": pick it up as it lies)
+          turned, tape_regrip     -> the taught pose ("taught"): jaws straddling the released brick, wrist turned ~90 deg.
+                                     Approach: tape_regrip_above if taught, else tape_regrip at tape_above's height
+                                     (lift / elbow / wrist flex of tape_above), always with tape_regrip's wrist roll,
+                                     so the last motion is straight down.
+          turned, not taught      -> tape_above / tape_place with the wrist rolled +90 deg, -90 deg if +90 would pass the
+                                     roll limit ("computed"). The turn is about the wrist-roll axis, which is NOT where
+                                     the brick is: the SO-101 has one fixed jaw and the brick was pressed against it.
+        The turn direction is the same for every re-grip of a cycle (coverage.py tracks both directions, but assumes
+        that each re-grip turns the same way)."""
+        above, place = self.tape_poses()
+        if not turned: return dict(above), dict(place), "as placed"
+        rg = self.tslot("tape_regrip")
+        if rg:
+            prob = self.regrip_problem()
+            if prob: raise RuntimeError(prob)
+            down = {k: float(v) for k, v in rg[0]["pos"].items()}
+            ra = self.tslot("tape_regrip_above")
+            up = {k: float(v) for k, v in ra[0]["pos"].items()} if ra else {**down, **{n: float(above[n]) for n in LIFT_J}}
+            up["wrist_roll"] = down["wrist_roll"]
+            return up, down, "taught"
+        lo, hi = self.A.fl["wrist_roll"]; r90 = 90 * TICK_PER_DEG; roll = place["wrist_roll"]
+        if roll + r90 <= hi - 20: roll = roll + r90
+        elif roll - r90 >= lo + 20: roll = roll - r90
+        else: raise RuntimeError("tape_place's wrist roll leaves no room for a 90° turn either way: re-teach it nearer the middle")
+        return {**above, "wrist_roll": roll}, {**place, "wrist_roll": roll}, "computed"
+
+    def lift(self, to, g, slow=1.0):
+        """Up off the tape spot from where the arm is: the first LIFT_FIRST of the way slowly, then the rest."""
+        frm = dict(self.A.cmd)
+        mid = {n: frm[n] + LIFT_FIRST * (float(to[n]) - frm[n]) for n in JOINTS}
+        self.goto(mid, self.cfg["speed"] * 0.3 * slow, gripper=g)
+        self.goto(to, self.cfg["speed"] * 0.5 * slow, gripper=g)
+
+    def place_on_tape(self, g_lock, g_open):
+        """Gently set the held brick down on the tape spot and let go; ends above the spot, gripper open (g_open).
+        At table height the gripper opens only `release_ticks` past the brick width (the moving jaw lets go without
+        sweeping or tipping the brick), the first part of the lift is slow, and it opens to g_open once up."""
+        A = self.A; above, place = self.tape_poses(); spd = self.cfg["speed"]
+        self.goto(above, gripper=g_lock); self.substep("above_tape")
+        self.goto(place, spd * 0.3, gripper=g_lock); self.substep("lowered")        # slow, straight down = gentle
+        gmax = A.fl["gripper"][1]
+        g_rel = min(gmax, max(A.pos["gripper"], A.cmd["gripper"]) + float(self.cfg.get("release_ticks", RELEASE_TICKS)))
+        self.goto(dict(A.cmd), 0.3, gripper=g_rel); time.sleep(0.2); self.substep("released")
+        self.lift(above, g_rel)
+        self.goto(dict(A.cmd), 0.5, gripper=max(g_rel, g_open)); self.substep("lifted")
+
+    def grip_on_tape(self, g_open, turned=True, slow=1.0, open_low=False):
+        """ONE attempt to grip the brick lying released on the tape spot (the arm is above it), then lift.
+        turned=True: wrist turned 90 deg (the taught tape_regrip pose if there is one, see regrip_poses), so the faces
+        that were under the fingers become visible.
+        Works for any brick width: opens wide, comes straight down, closes until the fingers STALL on the brick, then
+        squeezes a fixed amount past that width (a long brick turned 90 deg is much wider than in the first grip).
+        A miss lets go at table height and lifts straight up (a half-gripped brick is never dragged up).
+        open_low=True (retry after "slipped while lifting": holding() may have been a false negative): the gripper is
+        NOT opened at height; it goes down closed to just above the brick (where the slow part of the lift starts),
+        opens there, then continues as usual.
+        Returns (held, clamp command, why): why is None when held, else '<sub-step>: what went wrong'."""
+        A = self.A; spd = self.cfg["speed"]
+        up, down, how = self.regrip_poses(turned)
         gmin, gmax = A.fl["gripper"]
         g_wide = max(g_open, gmin + REGRIP_OPEN * (gmax - gmin))
-        lo, hi = A.fl["wrist_roll"]; r90 = 90 * TICK_PER_DEG
-        roll = place["wrist_roll"]
-        if turned: roll = roll + r90 if roll + r90 <= hi - 20 else roll - r90
         self.check()
-        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_wide, wrist_roll=roll)    # open wide + turn while up
-        self.goto(place, self.cfg["speed"] * 0.3, gripper=g_wide, wrist_roll=roll)    # straight down, open
-        self.goto(dict(A.cmd), 0.4, gripper=gmin)                                     # close until it stalls on the brick
-        g_new = max(gmin, A.pos["gripper"] - REGRIP_SQUEEZE)
+        if open_low:
+            g_now = A.cmd["gripper"]; near = {n: down[n] + LIFT_FIRST * (up[n] - down[n]) for n in JOINTS}
+            self.goto(up, spd * 0.5 * slow, gripper=g_now)                       # turn while up, gripper unchanged
+            self.goto(near, spd * 0.3 * slow, gripper=g_now)                     # down to just above the brick
+            self.goto(dict(A.cmd), 0.4, gripper=g_wide)                          # open only there
+        else:
+            self.goto(up, spd * 0.5 * slow, gripper=g_wide)                      # open wide + turn while up
+        self.substep("turned_above" if turned else "above_open", pose=how)
+        try:
+            self.goto(down, spd * 0.3 * slow, gripper=g_wide)                    # straight down, open
+        except RuntimeError as e:
+            if "BLOCKED" not in str(e): raise
+            self.goto(up, spd * 0.3, gripper=g_wide); self.substep("reopened")
+            return False, None, f"lowered open: {e} (a jaw on the brick?)"
+        lerr = max(abs(A.pos[n] - self._tgt[n]) for n in LIFT_J) / TICK_PER_DEG
+        self.substep("lowered_open", pose=how, lift_err_deg=round(lerr, 1))
+        cd = float(self.cfg.get("regrip_contact_deg") or 0)
+        if cd > 0 and lerr > cd:                                                 # optional, off by default
+            self.lift(up, g_wide, slow); self.substep("reopened")
+            return False, None, (f"lowered open: the arm stopped {lerr:.0f}° short of the grip pose "
+                                 f"(contact detection > {cd:g}°: a jaw is probably on the brick)")
+        self.goto(dict(A.cmd), 0.4 * slow, gripper=gmin)                         # close until it stalls on the brick
+        stall = A.pos["gripper"]
+        g_new = max(gmin, stall - REGRIP_SQUEEZE)
         self.goto(dict(A.cmd), 0.5, gripper=g_new); time.sleep(0.2)
-        held = self.holding()
-        self.goto(above, self.cfg["speed"] * 0.5, gripper=g_new, wrist_roll=roll)     # straight up
-        return held and self.holding(), g_new
+        held = self.holding(); self.substep("closed", stall=stall)
+        if not held:
+            why = ("closed: the fingers closed on nothing (the brick is not between the jaws)" if stall - gmin <= HOLD_MIN_OPEN
+                   else f"closed: the fingers stopped {100 * (stall - gmin) / max(1, gmax - gmin):.0f} % open but do not hold the brick")
+            self.goto(dict(A.cmd), 0.4, gripper=g_wide)                          # let go at table height ...
+            self.lift(up, g_wide, slow); self.substep("reopened")                # ... then straight up
+            return False, None, why
+        self.lift(up, g_new, slow)                                               # straight up
+        if not self.holding():
+            self.substep("lifted_held")
+            return False, None, "lifted: the brick slipped out of the fingers while lifting"
+        self.substep("lifted_held")
+        return True, g_new, None
+
+    def regrip(self, g_open, turned=True, attempts=2):
+        """grip_on_tape with a retry that is not a blind repeat: a failed attempt has already let go at table height and
+        lifted straight up (a tipped brick settles, a brick the closing jaw pushed now lies against the fixed jaw's
+        line), and the retry comes down and closes slower. The turn direction stays the same (coverage.py).
+        Returns (held, clamp command or None, [why per failed attempt]); self.regrip_info records it for the logs."""
+        self.regrip_info = None
+        how = self.regrip_poses(turned)[2]                     # a badly taught pose raises here, before any motion
+        whys, g = [], None
+        for a in range(attempts):
+            held, g, why = self.grip_on_tape(g_open, turned, slow=1.0 if a == 0 else 0.6,
+                                             open_low=bool(whys) and whys[-1].startswith("lifted:"))
+            if held: break
+            whys.append(why)
+            if a + 1 < attempts: self.say(f"re-grip attempt {a + 1} failed ({why}): reopened and lifted, trying once more, slower")
+        else:
+            held = False
+        self.regrip_info = {"turned": turned, "pose": how, "attempts": len(whys) + (1 if held else 0), "held": held, "failed": whys}
+        return held, (g if held else None), whys
+
+    @staticmethod
+    def why_text(whys):
+        return "; ".join(f"attempt {i + 1}: {w}" for i, w in enumerate(whys))
 
     def regrasp_90(self, g_lock, g_open, on_released=None):
         """Set down on the tape spot, [on_released(): e.g. photograph the released brick from above], turn the wrist
-        90 deg, grip again, lift. Returns True if the brick is held again; the new clamp command is self.g_relock."""
+        90 deg, grip again (one retry), lift. Returns True if the brick is held again; the new clamp command is
+        self.g_relock, the reasons of failed attempts self.regrip_info["failed"]."""
         self.place_on_tape(g_lock, g_open)
         if on_released: on_released()
-        held, self.g_relock = self.grip_on_tape(g_open, turned=True)
+        held, self.g_relock, _ = self.regrip(g_open, turned=True)
         return held
+
+    # ------------------------------------------------------------------ re-grip diagnostics (Test re-grip)
+    def start_diag(self, step_mode):
+        base = self.RUNS / datetime.now().strftime("regrip_test_%Y%m%d_%H%M%S"); d, n = base, 1
+        while d.exists(): n += 1; d = base.with_name(f"{base.name}_{n}")
+        d.mkdir(parents=True)
+        A = self.A; held = self.holding(); self.regrip_info = None
+        self.diag = {"dir": d, "step_mode": bool(step_mode), "active": True, "waiting": False, "i": 0, "rows": [],
+                     "t0": time.time(), "result": None, "width0": A.pos.get("gripper") if held else None, "started_holding": held}
+        self.info = {"regrip": self.diag_view()}
+        return d
+
+    def end_diag(self, result, ok):
+        d = self.diag
+        if not d: return
+        try: held = bool(self.holding())
+        except Exception: held = None
+        d.update({"active": False, "waiting": False, "result": result, "ok": ok, "held_end": held})
+        try:
+            (d["dir"] / "summary.json").write_text(json.dumps({
+                "result": result, "ok": ok, "holding_at_end": held, "step_mode": d["step_mode"], "started_holding": d["started_holding"],
+                "first_grip_width_ticks": d["width0"], "regrip_pose": self.regrip_status(), "regrip": self.regrip_info,
+                "steps": [r["step"] for r in d["rows"]], "limits": self.A.fl, "settings": {k: self.cfg.get(k) for k in (
+                    "speed", "release_ticks", "regrip_contact_deg", "step_timeout_s")},
+                "time": datetime.now().isoformat(timespec="seconds")}, indent=1))
+        except Exception as e:
+            print("re-grip test: summary not written:", e)
+        self.info = {"regrip": self.diag_view()}
+
+    def diag_view(self):
+        d = self.diag
+        if not d: return None
+        return {"dir": f"{d['dir'].parent.name}/{d['dir'].name}", "step_mode": d["step_mode"], "active": d["active"],
+                "waiting": d["waiting"], "rows": d["rows"], "plan": list(REGRIP_PLAN), "labels": REGRIP_STEPS,
+                "result": d["result"], "ok": d.get("ok"),
+                "holding": d.get("held_end") if not d["active"] else (d["rows"][-1]["holding"] if d["rows"] else None)}
+
+    def substep(self, name, **extra):
+        """A sub-step of the tape set-down / re-grip is done. Always: remember it. In the re-grip test also: log target vs
+        actual joints (a lift / elbow error at tape_place = pressing on the table or stopped short), the gripper (stall
+        position, opening, vs the first grip), holding(), and save camera frames to runs/regrip_test_<time>/; in step
+        mode wait for NEXT (N) before going on. STOP or no NEXT for step_timeout_s raises (the arm holds)."""
+        self.sub = name
+        d = self.diag
+        if not d or not d["active"]: return
+        A = self.A; tgt = dict(self._tgt or A.cmd); pos = dict(A.pos)
+        gmin, gmax = A.fl["gripper"]
+        pct = lambda t: round(100 * (t - gmin) / max(1, gmax - gmin), 1)
+        err = {n: round((pos[n] - tgt[n]) / TICK_PER_DEG, 1) for n in BODY}
+        d["i"] += 1; i = d["i"]
+        grip = {"cmd": round(float(A.cmd["gripper"]), 1), "pos": int(pos["gripper"]), "open_pct": pct(pos["gripper"]),
+                "cmd_pct": pct(A.cmd["gripper"]), "jaw_deg_from_closed": round((pos["gripper"] - gmin) / TICK_PER_DEG, 1)}
+        if "stall" in extra:
+            st = extra.pop("stall"); grip.update({"stall": int(st), "stall_pct": pct(st)})
+            if d["width0"] is not None: grip["stall_minus_first_grip_ticks"] = int(round(st - d["width0"]))
+        rec = {"i": i, "step": name, "label": REGRIP_STEPS.get(name, name), "t_s": round(time.time() - d["t0"], 2),
+               "target": {n: round(float(tgt[n]), 1) for n in JOINTS}, "actual": {n: int(pos[n]) for n in JOINTS},
+               "err_deg": err, "max_err_deg": max(abs(v) for v in err.values()), "gripper": grip,
+               "holding": bool(self.holding()), **extra, "frames": []}
+        for cam in DIAG_CAMS:
+            f = (getattr(self.S, "frames", None) or {}).get(cam)
+            if f is None: continue
+            fn = f"{i:02d}_{name}_{cam}.jpg"
+            try:
+                cv2.imwrite(str(d["dir"] / fn), f, [cv2.IMWRITE_JPEG_QUALITY, 85]); rec["frames"].append(fn)
+            except Exception as e:
+                rec.setdefault("frame_errors", []).append(f"{cam}: {e}")
+        try:
+            with open(d["dir"] / "steps.jsonl", "a") as fh: fh.write(json.dumps(rec) + "\n")
+        except Exception as e:                           # a full disk must not end the test mid-sequence
+            print("re-grip test: steps.jsonl not written:", e)
+        d["rows"].append({"i": i, "step": name, "label": rec["label"], "max_err_deg": rec["max_err_deg"],
+                          "lift_err_deg": {n: err[n] for n in LIFT_J}, "grip_pct": grip["open_pct"],
+                          "stall_pct": grip.get("stall_pct"), "stall_vs_first": grip.get("stall_minus_first_grip_ticks"),
+                          "holding": rec["holding"], "frames": rec["frames"]})
+        self.info = {"regrip": self.diag_view()}
+        if not d["step_mode"]: return
+        self.flags["next"].clear(); d["waiting"] = True; self.info = {"regrip": self.diag_view()}
+        le = ", ".join(f"{n.split('_')[0]} {err[n]:+.1f}°" for n in LIFT_J)
+        self.say(f"STEP {i}: {rec['label']} · error {le} · gripper {grip['open_pct']:.0f} % open · "
+                 f"{'holding' if rec['holding'] else 'not holding'} · N = next step, STOP ends the test")
+        lim = float(self.cfg.get("step_timeout_s") or STEP_TIMEOUT_S); t0 = time.monotonic()
+        try:
+            while not self.flags["next"].wait(0.1):
+                self.check()
+                if time.monotonic() - t0 > lim: raise StepTimeout(f"no NEXT for {lim:g} s")
+            self.check()
+        finally:
+            d["waiting"] = False; self.info = {"regrip": self.diag_view()}
 
     def up_wp2(self, wp1, wp2, g_lock):
         """Straight UP out of WP2 to the pose above it."""
@@ -238,36 +527,59 @@ class Collector:
         self.goto(above, self.cfg["speed"] * 0.5, gripper=g_lock)
         self.goto(wp1, gripper=g_lock)
 
-    def test_wp2(self, kind="wp2"):
-        """Dry runs with whatever is in the gripper (nothing saved, <=30 % speed).
-        kind=wp2: WP1 -> above WP2 -> down into WP2 -> up -> WP1.  kind=regrasp: tape spot set-down + 90 deg re-grip."""
+    def test_wp2(self, kind="wp2", step=False):
+        """Dry runs with whatever is in the gripper (nothing saved to the datasets, <=30 % speed).
+        kind=wp2: WP1 -> above WP2 -> down into WP2 -> up -> WP1.
+        kind=regrasp: tape spot set-down + 90 deg re-grip (with the retry), diagnosed: every sub-step is logged with
+        target vs actual joints, gripper, holding() and wrist/top frames to runs/regrip_test_<time>/ (steps.jsonl,
+        summary.json, jpgs). step=True: pauses after every sub-step until NEXT (N)."""
         A = self.A
-        self.active = True; A.running = True; self.stop_flag.clear(); A.stop.clear(); self.state = "capture"
+        self.active = True; A.running = True; self.stop_flag.clear(); A.stop.clear()
+        self.state = "regrasp" if kind == "regrasp" else "capture"
+        diag = False; self.sub = None
         try:
             if A.mode != "hold": A.set_mode("hold", force=True)
-            wp1 = self.wps("wp1")[0]["pos"]; wp2 = self.wps("wp2"); g = A.cmd["gripper"]
+            g = A.cmd["gripper"]
             spd = self.cfg["speed"]; self.cfg["speed"] = min(spd, 0.3)
             try:
                 if kind == "regrasp":
                     if not (self.slot("tape_above") and self.slot("tape_place")): raise RuntimeError("teach the tape spot (above + on) first")
+                    self.freeze_tape()                   # validates every pose BEFORE the brick is set down
                     gmin, gmax = A.fl["gripper"]
                     g_open = max(self.wps("home")[0]["pos"]["gripper"], gmin + 0.35 * (gmax - gmin))
-                    self.say("TEST: set down on the tape spot, re-grip turned 90°")
+                    d = self.start_diag(step); diag = True
+                    how = self.regrip_poses(True)[2]
+                    self.say(f"TEST: set down on the tape spot, re-grip turned 90° ({how} pose)"
+                             + (" · step by step: N after each step" if step else "") + f" · log: runs/{d.name}")
                     ok = self.regrasp_90(g, g_open)
-                    if not ok: raise RuntimeError("re-grip test: brick NOT held after re-gripping")
+                    if not ok: raise RuntimeError("re-grip test: brick NOT held after re-gripping ("
+                                                  + self.why_text((self.regrip_info or {}).get("failed", [])) + ")")
                 else:
+                    wp1 = self.wps("wp1")[0]["pos"]; wp2 = self.wps("wp2")
                     self.say("TEST: to WP1"); self.goto(wp1, gripper=g)
                     self.say("TEST: above WP2, then straight down"); self.to_wp2(wp1, wp2, g)
                     for w in wp2[1:]: self.goto(w["pos"], gripper=g)
                     self.say("TEST: straight up, back to WP1"); self.from_wp2(wp1, wp2, g)
             finally:
                 self.cfg["speed"] = spd
-            self.state = "done"; self.say(f"✓ test of the {'tape re-grip' if kind == 'regrasp' else 'WP1 → WP2 path'} done (nothing saved)")
-        except Stopped:
-            self.state = "stopped"; self.say("STOPPED: arm holds its position", False)
+            self.state = "done"
+            if kind == "regrasp":
+                tries = (self.regrip_info or {}).get("attempts", 1)
+                self.say(f"✓ test of the tape re-grip done: brick held again{f' (needed {tries} attempts)' if tries > 1 else ''}"
+                         f" · log: runs/{self.diag['dir'].name}")
+            else:
+                self.say("✓ test of the WP1 → WP2 path done (nothing saved)")
+            if diag: self.end_diag("held again", True)
+        except Stopped as e:
+            self.state = "stopped"
+            m = f"STOPPED (step mode: {e}): arm holds its position" if isinstance(e, StepTimeout) else "STOPPED: arm holds its position"
+            self.say(m + (f" · after {self.sub}" if diag and self.sub else ""), False)
+            if diag: self.end_diag(f"stopped after {self.sub}" + (f" ({e})" if isinstance(e, StepTimeout) else ""), False)
         except Exception as e:
             self.state = "error"; self.say(f"ERROR: {e}", False)
+            if diag: self.end_diag(f"error: {e}", False)
         finally:
+            self.thaw_tape()
             try: self.hold_here()
             except Exception: pass
             self.active = False; A.running = False
@@ -394,6 +706,10 @@ class Collector:
         self.state = "capture"; n_img = 0; self.g_relock = None
         cams = [c for c in self.cfg.get("inspect_cams", ["front"]) if c in self.S.live]
         tape = self.cfg.get("regrasp") and self.slot("tape_above") and self.slot("tape_place")
+        if tape:
+            try: self.freeze_tape()              # this episode's tape poses, validated before anything is set down
+            except Exception as e:
+                tape = False; self.say(f"phase 2: re-grip skipped ({e})", False)
 
         def shoot(suffix, note):
             n = 0
@@ -420,15 +736,21 @@ class Collector:
                 time.sleep(0.25); self.check()
                 self.say("phase 2: photo of the released brick from above (tape spot)")
                 n_img += self.ctx.capture(rel_cams, label, brick, "tape_top", idx, self.session, kind="release")
-            if self.regrasp_90(g_lock, g_open, on_released=released):
+            try: ok = self.regrasp_90(g_lock, g_open, on_released=released)
+            finally: self.thaw_tape()
+            if ok:
                 g_lock = self.g_relock          # the turned brick can have another width: keep the new clamp
                 self.state = "capture"
                 self.to_wp2(wp1, wp2, g_lock)
-                n_img += shoot("_r90", "(turned 90°)")
+                # a retry may have spun or tipped the brick: its orientation is not verified -> marked in the view name
+                # (meta.jsonl "view"), so these photos can be kept but told apart
+                retried = (self.regrip_info or {}).get("attempts", 1) > 1
+                n_img += shoot("_r90retry" if retried else "_r90", "(turned 90°" + (", after a retry: orientation not verified)" if retried else ")"))
                 self.up_wp2(wp1, wp2, g_lock)
             else:
                 on_tape = True
-                self.say("re-grip FAILED: the brick is left on the tape spot (put it back on the orange plate)", False)
+                self.say("re-grip FAILED (" + self.why_text((self.regrip_info or {}).get("failed", [])) + "): the brick is left on "
+                         "the tape spot (put it back on the orange plate)", False)
         return n_img, on_tape
 
     def reset(self, home, wp1, drops, grasp_pose, g_lock, g_open, on_tape):
@@ -565,7 +887,7 @@ def make_router(S, A, ctx, DATA, ROOT):
                 "target": C.target, "session": C.session, "cfg": C.cfg, "connected": A.f is not None,
                 "routines": list(ctx.R["routines"]), "sessions": sessions, "live": S.live,
                 "export_running": export["proc"] is not None, "export_log": export["log"][-4000:],
-                "resume": C.resumable(), "fails": C.fails, "attempt": C.attempt}
+                "resume": C.resumable(), "fails": C.fails, "attempt": C.attempt, "regrip_pose": C.regrip_status()}
 
     @r.get("/collect")
     def page(): return RedirectResponse("/record")      # the UI lives at / now (ui.py, web/)
@@ -599,16 +921,28 @@ def make_router(S, A, ctx, DATA, ROOT):
             if C.cfg.get("phase2"): C.wps("wp2")
             if C.cfg.get("phase2") and C.cfg.get("regrasp") and not (C.slot("tape_above") and C.slot("tape_place")):
                 raise RuntimeError("re-grip is on: teach the tape spot (above + on) first, or switch the re-grip off")
+            if C.cfg.get("phase2") and C.cfg.get("regrasp") and C.regrip_check(): raise RuntimeError(C.regrip_check())
         except Exception as e:
             C.say(str(e), False); return status()
         threading.Thread(target=C.run, args=(max(1, n), brick.strip(), label, resume or None), daemon=True).start()
         time.sleep(0.1); return status()
 
     @r.post("/collect/test_wp2")
-    def test_wp2(kind: str = "wp2"):
+    def test_wp2(kind: str = "wp2", step: bool = False):
         if C.active or A.running: C.say("busy: stop first", False); return status()
         if A.f is None: C.say("connect the arm first", False); return status()
-        threading.Thread(target=C.test_wp2, args=(kind,), daemon=True).start(); time.sleep(0.1); return status()
+        threading.Thread(target=C.test_wp2, args=(kind, step), daemon=True).start(); time.sleep(0.1); return status()
+
+    @r.get("/collect/regrip/frame")
+    def regrip_frame(i: int = 0, cam: str = "wrist"):
+        """A camera frame saved by the re-grip test at sub-step i (0 = the latest one); 204 if there is none."""
+        d = C.diag
+        rows = [x for x in (d["rows"] if d else []) if x["frames"] and (not i or x["i"] == i)]
+        if not rows: return Response(status_code=204)
+        fn = next((f for f in rows[-1]["frames"] if f.endswith(f"_{cam}.jpg")), None)
+        if fn is None or not (d["dir"] / fn).exists(): return Response(status_code=404)      # never another camera's frame
+        p = d["dir"] / fn
+        return Response(p.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @r.post("/collect/stop")
     def stop():
@@ -629,7 +963,8 @@ def make_router(S, A, ctx, DATA, ROOT):
     @r.post("/collect/cfg")
     def cfg(home: str = "", wp1: str = "", wp2: str = "", drops: str = "", speed: float = 0,
             roll_jitter: float = -1, inspect_cams: str = "", phase2: str = "", regrasp: str = "",
-            release_cams: str = None, lift_frac: float = -1):
+            release_cams: str = None, lift_frac: float = -1, release_ticks: float = -1, regrip_contact_deg: float = -1,
+            step_timeout_s: float = -1):
         if phase2: C.cfg["phase2"] = phase2 == "true"
         if regrasp: C.cfg["regrasp"] = regrasp == "true"
         if home: C.cfg["home"] = home
@@ -639,6 +974,9 @@ def make_router(S, A, ctx, DATA, ROOT):
         if speed: C.cfg["speed"] = min(1.0, max(0.1, speed))
         if roll_jitter >= 0: C.cfg["roll_jitter"] = min(90, roll_jitter)
         if lift_frac >= 0: C.cfg["lift_frac"] = min(0.8, max(0.05, lift_frac))
+        if release_ticks >= 0: C.cfg["release_ticks"] = min(1000.0, max(60.0, release_ticks))
+        if regrip_contact_deg >= 0: C.cfg["regrip_contact_deg"] = min(30.0, regrip_contact_deg)      # 0 = off
+        if step_timeout_s >= 0: C.cfg["step_timeout_s"] = min(3600.0, max(0.2, step_timeout_s))
         if inspect_cams: C.cfg["inspect_cams"] = [c for c in inspect_cams.split(",") if c]
         if release_cams is not None: C.cfg["release_cams"] = [c for c in release_cams.split(",") if c]
         C.save_cfg(); return status()

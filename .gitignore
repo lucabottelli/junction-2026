@@ -21,3 +21,12 @@ sim/eval/
 sim/MUJOCO_LOG.TXT
 sim/calib/live_*.jpg
 sim/calib/now_*.jpg
+
+# dev / test environments and artefacts (see docs/DEV.md)
+.venv-anomalib/
+mock_data/
+tests/screenshots/
+.pytest_cache/
+node_modules/
+bench/results/*
+!bench/results/.gitkeep

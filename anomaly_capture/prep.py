@@ -9,9 +9,13 @@ Background movement (people walking past the fixed cameras) is handled in two wa
   * Anomaly images of the held brick: the front RealSense depth keeps only the nearest object cluster
     (gripper + brick) and paints everything behind it flat grey (`inhand_mask`).
 """
+import json
+from pathlib import Path
+
 import cv2
 import numpy as np
 
+INSPECT_SETTINGS = Path(__file__).resolve().parent / "inspect_settings.json"   # release-view crop per camera
 ACT_W, ACT_H = 640, 480     # matches the Studio environment's camera shape (480x640x3)
 GREY = 128
 
@@ -79,6 +83,58 @@ def apply_mask(img, mask):
     out = np.full_like(img, GREY)
     out[mask > 0] = img[mask > 0]
     return out
+
+
+def inspect_crop(img, depth_mm=None, pad=0.08):
+    """THE anomaly-model input for a held brick (training crops AND live inspection use this, see RULE above).
+
+    Depth-masked (background -> flat grey), then a square crop around the nearest object cluster (gripper + brick),
+    padded with grey where the square leaves the image. Without usable depth the full masked/unmasked frame is
+    returned and info["masked"] is False (the caller should treat that photo with suspicion).
+    Returns (crop BGR, info dict).
+    """
+    if depth_mm is None: return img, {"masked": False, "why": "no depth"}
+    m, info = inhand_mask(depth_mm)
+    if m is None: return img, {"masked": False, "why": info}
+    if m.shape[:2] != img.shape[:2]:
+        m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+    out = apply_mask(img, m)
+    b = mask_bbox(m, pad)
+    if b is None: return out, {"masked": False, "why": "empty mask"}
+    x0, y0, x1, y1 = b
+    side = max(x1 - x0, y1 - y0); cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    sx0, sy0 = cx - side // 2, cy - side // 2
+    H, W = img.shape[:2]
+    crop = np.full((side, side, 3), GREY, np.uint8)
+    ax0, ay0, ax1, ay1 = max(0, sx0), max(0, sy0), min(W, sx0 + side), min(H, sy0 + side)
+    crop[ay0 - sy0:ay1 - sy0, ax0 - sx0:ax1 - sx0] = out[ay0:ay1, ax0:ax1]
+    return crop, {"masked": True, "bbox": [int(sx0), int(sy0), int(sx0 + side), int(sy0 + side)], **info}
+
+
+def release_roi(cam):
+    """Crop (x0,y0,x1,y1 as fractions of the frame) for photos of the RELEASED brick on the tape spot, per camera.
+    Stored in inspect_settings.json so collection, training crops and the live sorter always agree."""
+    try: r = json.loads(INSPECT_SETTINGS.read_text())["release_roi"][cam]
+    except Exception: r = [0.0, 0.0, 1.0, 1.0]
+    return [float(min(1, max(0, v))) for v in r]
+
+
+def set_release_roi(cam, roi):
+    try: d = json.loads(INSPECT_SETTINGS.read_text())
+    except Exception: d = {}
+    x0, y0, x1, y1 = [float(min(1, max(0, v))) for v in roi]
+    if x1 - x0 < 0.05 or y1 - y0 < 0.05: raise ValueError("crop too small")
+    d.setdefault("release_roi", {})[cam] = [x0, y0, x1, y1]
+    INSPECT_SETTINGS.write_text(json.dumps(d, indent=1))
+
+
+def release_crop(img, cam):
+    """THE anomaly-model input for the brick lying released on the tape spot (seen from above, e.g. wrist camera).
+    The brick is always at the same place there, so a fixed crop is enough (no depth needed)."""
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = release_roi(cam)
+    b = [int(x0 * W), int(y0 * H), max(int(x0 * W) + 8, int(x1 * W)), max(int(y0 * H) + 8, int(y1 * H))]
+    return img[b[1]:b[3], b[0]:b[2]].copy(), {"masked": True, "kind": "release", "bbox": b}
 
 
 def mask_bbox(mask, pad=0.08):

@@ -714,7 +714,11 @@ if __name__ == "__main__":
         app.include_router(router)
         import collect, ui
         app.include_router(ui.router)
-        app.include_router(collect.make_router(S, ARM, ACTX, DATA, ROOT))
+        crouter = collect.make_router(S, ARM, ACTX, DATA, ROOT)
+        app.include_router(crouter)
+        import sorter
+        app.include_router(sorter.make_router(S, ARM, ACTX, crouter.collector, DATA, ROOT))
+        print("inspect + sort (phases 3-5): section 'Inspect & sort' on http://127.0.0.1:7870/arm")
         print("pick+inspect data collection: http://127.0.0.1:7870/collect")
         print("arm auto-capture: http://127.0.0.1:7870/arm")
     except Exception as e:

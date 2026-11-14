@@ -44,6 +44,7 @@ os.environ["PYTHONPATH"] = str(FAKE)
 
 import arm, collect, coverage as cov, sorter  # noqa: E402
 from arm import JOINTS  # noqa: E402
+sorter.HERE = Path(tempfile.mkdtemp(prefix="sortcfg_"))   # never read / overwrite the station's real sort_settings.json
 
 NOSLEEP = types.SimpleNamespace(sleep=lambda s: None, time=time.time, perf_counter=time.perf_counter, monotonic=time.monotonic)
 TRUE = {"view_deg": 65.0, "finger_deg": 35.0}      # physical truth (the sorter's model keeps a 5 deg margin to this)

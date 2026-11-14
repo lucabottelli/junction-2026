@@ -45,6 +45,21 @@ REGRIP_OPEN = 0.9        # gripper opening (fraction of its range) when coming d
 REGRIP_SQUEEZE = 80      # ticks the re-grip closes past the width where the fingers stalled on the brick
 
 
+class GraspDetector:
+    """The automatic hand-off rule of episode() (and sorter.pick_teleop), as a reusable object for policy.py:
+    the gripper is commanded HOLD_GAP ticks more closed than it actually is, has not moved more than HOLD_STILL
+    over 0.25 s and is not fully shut (HOLD_MIN_OPEN above the closed end), continuously for HOLD_TIME.
+    update(now, actual gripper, commanded gripper target) -> True once the fingers have stalled on an object."""
+    def __init__(self, gmin):
+        self.gmin, self.gq, self.since = gmin, [], None
+
+    def update(self, now, g, c):
+        self.gq = [(t, v) for t, v in self.gq if now - t < 0.25] + [(now, g)]
+        still = max(v for _, v in self.gq) - min(v for _, v in self.gq) <= HOLD_STILL and now - self.gq[0][0] > 0.2
+        self.since = (self.since or now) if (c < g - HOLD_GAP and still and g - self.gmin > HOLD_MIN_OPEN) else None
+        return bool(self.since and now - self.since >= HOLD_TIME)
+
+
 class Collector:
     def __init__(self, S, A, ctx, DATA, ROOT):
         self.S, self.A, self.ctx, self.DATA = S, A, ctx, DATA
@@ -83,7 +98,7 @@ class Collector:
             for k in REC_CAMS:
                 f = S.frames.get(k)          # reference to the latest frame (frames are replaced, never mutated)
                 if f is None: continue
-                fr[k] = cv2.imencode(".jpg", prep.act_frame(f, roi[k]), [cv2.IMWRITE_JPEG_QUALITY, 93])[1].tobytes()
+                fr[k] = prep.act_jpeg(f, roi[k])     # same bytes as before; policy.py decodes the same way
                 ages[k] = time.time() - S.frame_t[k]
             buf["t"].append(now - t0); buf["frames"].append(fr); buf["age"].append(ages)
             buf["state"].append([A.pos[n] for n in JOINTS]); buf["action"].append([A.goal[n] for n in JOINTS])
@@ -559,7 +574,7 @@ def make_router(S, A, ctx, DATA, ROOT):
     def run_export(speedup: float = 1.5, max_attempts: int = 1, name: str = "", dry: bool = False, bricks: str = ""):
         if export["proc"] is not None: return status()
         args = [sys.executable, "-u", str(Path(__file__).resolve().parent / "export_act.py"),
-                "--speedup", str(speedup), "--max-attempts", str(max_attempts)]
+                "--speedup", str(speedup), "--max-attempts", str(max_attempts), "--episodes", str(C.EP)]
         if name: args += ["--name", name]
         if bricks: args += ["--bricks"] + [b for b in bricks.split(",") if b]
         if dry: args += ["--dry-run"]

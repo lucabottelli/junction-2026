@@ -11,7 +11,7 @@ A single-page app assembled from the files in web/ on EVERY request (edit a file
 See web/DESIGN.md for the contract. Every page path (data-path) is served the same HTML; core.js routes client-side.
 It only calls the existing APIs of arm.py (/arm/*), collect.py (/collect/*) and capture.py (/snap, /status, ...).
 """
-import re
+import os, re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -47,7 +47,16 @@ def render():
     scripts = "".join("<script>/* js/%s */\n%s\n</script>\n" % (n, src.replace("</script", "<\\/script")) for n, src in js)
     scripts += "<script>boot()</script>"
     shell = _read(WEB / "shell.html")
-    return shell.replace("{{CSS}}", css).replace("{{PAGES}}", html).replace("{{SCRIPTS}}", scripts)
+    out = shell.replace("{{CSS}}", css).replace("{{PAGES}}", html).replace("{{SCRIPTS}}", scripts)
+    if os.environ.get("JUNCTION_MOCK") == "1":     # mock station (mock_hw.py): say so on every page
+        i = out.rfind("</body>"); out = out[:i] + MOCK_BADGE + out[i:] if i >= 0 else out + MOCK_BADGE
+    return out
+
+
+MOCK_BADGE = ('<div id=mockbadge title="capture.py runs with simulated cameras and arms (mock_hw.py, docs/DEV.md); '
+              'nothing here moves real hardware" style="position:fixed;left:12px;bottom:12px;z-index:50;padding:4px 10px;'
+              'border:1px solid var(--warn);border-radius:var(--r-xs);background:var(--surface);color:var(--warn);'
+              'font:600 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;pointer-events:auto">Mock station</div>')
 
 
 def serve():

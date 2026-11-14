@@ -146,6 +146,16 @@
 #p-sort .so-livecov .so-k .num{color:var(--ink);font-weight:500;letter-spacing:0;margin-left:6px}
 #p-sort .so-msg:not(:empty){margin-top:18px;font:12.5px/1.5 var(--mono);color:var(--ink3)}
 #p-sort .so-msg .so-bad{color:var(--err)}
+#p-sort .so-actlive:not(:empty){display:flex;flex-wrap:wrap;gap:6px 22px;margin-top:10px;font-size:12.5px;color:var(--ink3)}
+#p-sort .so-actlive b{color:var(--ink);font-weight:500}
+
+/* pick = ACT policy */
+#p-sort .so-act{padding:18px 0 6px;margin:4px 0 6px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+#p-sort .so-act[hidden]{display:none}
+#p-sort .so-arow{display:flex;gap:8px;align-items:center}
+#p-sort .so-arow select{flex:1;min-width:0}
+#p-sort .so-act .hint code{font-size:11px;word-break:break-all}
+#p-sort #so-awarn:not(:empty){margin-top:12px}
 
 /* manual judge */
 #p-sort .so-judge{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:24px;margin-top:20px;padding:22px;border:1px solid var(--acc-line);border-radius:var(--r);background:var(--acc-soft)}
@@ -221,3 +231,4 @@
  #p-sort .so-runcard .seg.full{flex-direction:column}
  #p-sort .so-now{padding:22px 20px}
 }
+#p-sort .so-act>.hint{font-size:12.5px;line-height:1.5;color:var(--ink3);margin:2px 0 6px}

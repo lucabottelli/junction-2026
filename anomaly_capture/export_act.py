@@ -48,6 +48,16 @@ def normalize(ticks, lim):
     return out
 
 
+def denormalize(units, lim):
+    """Inverse of normalize(): Studio normalized units (N, 6) -> follower ticks (N, 6). Used by the live
+    policy runner (policy.py) to turn ACT actions back into servo targets."""
+    u = np.atleast_2d(np.asarray(units, dtype=np.float64)); out = np.empty_like(u)
+    for j, n in enumerate(JOINTS):
+        lo, hi = lim[n]; fr = u[:, j] / 100 if n == "gripper" else (u[:, j] + 100) / 200
+        out[:, j] = lo + np.clip(fr, 0, 1) * (hi - lo)
+    return out
+
+
 def plan(meta, d, a, args):
     """Return (selected frame indices, report) for one episode."""
     fps = meta["fps"]; N = len(d["t"]); lim = meta["follower_limits"]

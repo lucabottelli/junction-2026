@@ -6,6 +6,7 @@
      POST /sort/cfg?<key>=<value>   POST /sort/faces?view=V&sides=a,b    POST /sort/release_roi?x0&y0&x1&y1 (percent)
      POST /sort/start?n=N   POST /sort/flag/{grasped,next}   POST /sort/judge/{clean,defect,unsure}
      POST /sort/calibrate?brick=B&cam=C&fast=true|false                  (STOP: core's stopAll() sends /sort/stop)
+     GET  /sort/policies  ACT exports for pick=act (Studio models dir + models/) and the OpenVINO devices (safe GET)
      GET  /sort/judge.jpg, /sort/photo/I, /sort/release_view.jpg
    Keys C D U and G N are handled by core (this file only flashes the matching button).
    Demo: /sort?demo=1 (or /?demo=1#/sort before the restart) renders sample data and NEVER sends a request:
@@ -24,6 +25,8 @@ const ST={
  match:['Match the leader','warn','Match the leader','Bring every leader joint within 8° of the robot.','Waits, then copies the leader.'],
  pick:['Pick','rec','Pick the object','Grip it with the leader. Press G if the robot doesn’t notice the grasp.','Copies the leader (not recorded).'],
  carry:['To waypoint 1','info','Let go of the leader','Hands off.','Lifts the object to waypoint 1.'],
+ act_load:['Loading policy','info','Loading the ACT policy','Wait. The first load compiles the model for the device.','Holds its position.'],
+ act:['ACT pick','rec','The robot picks by itself','Hands off. Press G if it holds the object but doesn’t notice.','Runs the trained policy until the fingers close on the object, then lifts it to waypoint 1.'],
  inspect:['Inspecting','info','Inspecting','Hands off.','Shows the object to the front camera, one WP2 pose at a time.'],
  judge:['Your call','acc','Judge the photo','Look at the photo and answer C, D or U.','Holds the object still and waits for your answer.'],
  regrasp:['Re-grip','info','Re-grip on the tape spot','Hands off.','Sets the object down, takes the top photo, grips it again turned 90°.'],
@@ -43,9 +46,10 @@ const SLOTS={
 const JS={shoulder_pan:'Pan',shoulder_lift:'Lift',elbow_flex:'Elbow',wrist_flex:'Wrist',wrist_roll:'Roll',gripper:'Grip'};
 // config inputs: [id, /sort/cfg key, kind]   (segments: pick, judge, release_cam)
 const CFG=[['so-tl','t_low'],['so-th','t_high'],['so-rt','retries'],['so-vd','view_deg'],['so-fd','finger_deg'],['so-mr','max_regrasps'],
- ['so-dev','device'],['so-fdev','fast_device'],['so-brick','brick'],['so-inc','allow_incomplete',1],['so-rel','release',1],['so-casc','cascade',1]];
+ ['so-dev','device'],['so-fdev','fast_device'],['so-brick','brick'],['so-inc','allow_incomplete',1],['so-rel','release',1],['so-casc','cascade',1],
+ ['so-amodel','act_model'],['so-adev','act_device'],['so-amode','act_mode'],['so-amax','act_max_s'],['so-aret','act_retries'],['so-aspd','act_speed']];
 
-let gotSort=false,faceSig='',photoSig='',roiSig='',plateSig='',brickSig='';
+let gotSort=false,faceSig='',photoSig='',roiSig='',plateSig='',brickSig='',polSig='',POL=null,polBusy=false;
 
 /* ---------- demo mode (never sends anything) ---------- */
 const DEMO0=(()=>{try{const q=new URLSearchParams(location.search).get('demo'),pth=location.pathname.replace(/\/+$/,'');
@@ -55,7 +59,8 @@ const demoKind=()=>{const d=demoOf();return !d?null:(d=='1'||d=='true')?'judge':
 function post(u){if(demoOf()){toast('Demo mode: nothing was sent');return false}p(u);return true}
 
 function demoSO(k){
- const cfg={pick:'handfeed',judge:'manual',brick:'red',cam:'front',device:'GPU',t_low:.4,t_high:.6,retries:2,
+ const cfg={pick:k=='act'?'act':'handfeed',judge:'manual',brick:'red',cam:'front',device:'GPU',t_low:.4,t_high:.6,retries:2,
+  act_model:'/home/intel/.local/share/physicalai/models/3f2a/exports/openvino',act_device:'GPU',act_backend:'auto',act_mode:'chunk',act_max_s:20,act_retries:2,act_speed:1,
   faces:{wp2_front:['front'],wp2_back:['back'],wp2_down:['down','front']},allow_incomplete:false,release:true,release_cam:'wrist',
   cascade:false,fast_variant:'_efficientad',fast_device:'NPU',view_deg:65,finger_deg:35,max_regrasps:2};
  const plan={steps:[{grip:1,view:'wp2_front',shows:['S1','U']},{grip:1,view:'wp2_back',shows:['S2']},{grip:1,view:'wp2_down',shows:['D']},
@@ -81,6 +86,9 @@ function demoSO(k){
   done:'object 3: GOOD - whole surface seen clean (6 photos, 1 re-grip) (38.2 s after the pick)',stopped:'STOPPED: arm holds its position',
   error:'ERROR: teach the good-plate pose (sort_good) first (arm holds its position)'};
  s.msg=M[k]||'';
+ s.act={loaded:'3f2a · openvino · GPU',live:k=='act'?{attempt:1,of:3,t:3.4,steps:102,mode:'chunk',inferences:21,chunk:100,infer_ms_p50:18.2,infer_ms_p95:24.9}:{},
+  last:{infer_ms_p50:18.4,infer_ms_p95:26.1,n_attempts:1,inferences:44,device:'GPU',backend:'openvino'},roi_warning:null};
+ if(k=='act')Object.assign(s.cur,{steps:[],regions:{},seen_pct:0});
  if(k=='idle'){Object.assign(s,{active:false,cur:{},history:[],totals:{good:0,defect:0,aborted:0},session:null,photos:[]})}
  if(k=='handfeed')Object.assign(s.cur,{steps:[],regions:{},seen_pct:0});
  if(k=='inspect'||k=='judge')s.cur.steps=s2;
@@ -104,6 +112,9 @@ function armState(){const d=demoKind();if(!d)return A;
  return a}
 const sortState=()=>{const d=demoKind();return d?(d=='off'?null:demoSO(d)):SO};
 
+const DEMO_POL={exports:[{path:'/home/intel/.local/share/physicalai/models/3f2a/exports/openvino',id:'3f2a',name:'pick-red-x40',backend:'openvino',policy:'act',chunk:100,cams:['top','wrist'],mtime:'2026-11-15 09:12',source:'studio'},
+ {path:'/home/intel/.local/share/physicalai/models/3f2a/exports/torch',id:'3f2a',name:'pick-red-x40',backend:'torch',policy:'act',chunk:100,cams:['top','wrist'],mtime:'2026-11-15 09:12',source:'studio'}],devices:['CPU','GPU','NPU']};
+
 /* ---------- helpers ---------- */
 const wpsOf=(a,n)=>{const r=a&&a.all&&a.all[n];return (r&&Array.isArray(r.waypoints))?r.waypoints:[]};
 const here=(a,x)=>{const p=a&&a.pos;if(!p||!x||!x.pos)return false;const ks=Object.keys(JS).filter(k=>k!='gripper'&&k in x.pos&&k in p);
@@ -117,6 +128,10 @@ function flashKey(id){const b=$(id);if(!b)return;b.classList.remove('so-hit');vo
 
 /* ---------- actions ---------- */
 function soCfg(k,val){post('/sort/cfg?'+k+'='+encodeURIComponent(val))}
+// ACT exports: a GET (safe, also in demo mode it is replaced by sample data)
+function soPolicies(force){if(polBusy||(POL&&!force))return;if(demoOf()){POL=DEMO_POL;polSig='';render();return}
+ if(!SO)return;polBusy=true;const none={exports:[],devices:[]};
+ fetch('/sort/policies').then(r=>r.ok?r.json():none).catch(()=>none).then(j=>{POL=j||none;polSig='';polBusy=false;render()})}
 function soFaces(el){const v=el.dataset.v,sides=[...document.querySelectorAll('#so-facetab input')].filter(x=>x.dataset.v==v&&x.checked).map(x=>x.dataset.s);
  if(!post('/sort/faces?view='+encodeURIComponent(v)+'&sides='+sides.join(',')))faceSig=''}
 function soRoi(){const g=id=>encodeURIComponent($(id).value);post(`/sort/release_roi?x0=${g('so-x0')}&y0=${g('so-y0')}&x1=${g('so-x1')}&y1=${g('so-y1')}`)}
@@ -200,7 +215,9 @@ function coverage(s){const c=(s&&s.cfg)||{},nm=names(s),pl=(s&&s.plan)||null,wp2
 function run(a,s){const c=(s&&s.cfg)||{};
  segOn('so-pick',c.pick);segOn('so-judge',c.judge);
  setH('so-pickhint',c.pick=='teleop'?'Match the leader, pick with it; the robot notices the grasp (G if it doesn’t) and carries the object to waypoint 1.'
-  :c.pick=='handfeed'?'The robot waits at waypoint 1 with the gripper open; put the object between the fingers and press G.':'');
+  :c.pick=='handfeed'?'The robot waits at waypoint 1 with the gripper open; put the object between the fingers and press G.'
+  :c.pick=='act'?'From the start pose the trained policy picks the object from the input plate by itself; after a miss it lets go and tries again.':'');
+ actPanel(s,c);
  const mdl=$('so-model');if(mdl)mdl.classList.toggle('is-off',c.judge!='model');
  const fd=document.querySelector('#p-sort .so-fdev');if(fd)fd.classList.toggle('is-off',!c.cascade);
  // brick models for the camera in use (main models only)
@@ -209,7 +226,7 @@ function run(a,s){const c=(s&&s.cfg)||{};
  const sel=$('so-brick');if(sel&&opts!=brickSig&&document.activeElement!==sel){brickSig=opts;sel.innerHTML=opts;delete sel.dataset.sv}
  if(s)syncCfg(c);
  CFG.concat([['so-nobj']]).forEach(([id])=>{const e=$(id);if(e)e.disabled=!s});
- document.querySelectorAll('#so-pick button,#so-judge button,#so-relcam button').forEach(b=>{if(b.dataset.v!='act')b.disabled=!s});
+ document.querySelectorAll('#so-pick button,#so-judge button,#so-relcam button').forEach(b=>{b.disabled=!s});
  const sb=$('so-start');if(sb){sb.disabled=!s||!!s.active||!!(C&&C.active);sb.title=!s?'The sorter isn’t loaded: restart the server':s.active?'A run is in progress':C&&C.active?'A recording is running':''}
  // before you start
  const t=n=>wpsOf(a,n).length>0,pl=(s&&s.plan)||{},bins=(s&&s.bins)||{};let nNo=0;
@@ -220,8 +237,23 @@ function run(a,s){const c=(s&&s.cfg)||{};
   +it(s.tape,'Tape spot taught (re-grip)','/waypoints')+it(bins.good&&bins.defect,'Both plates taught (section 1)')
   +it(pl.complete||c.allow_incomplete,pl.complete?'Whole surface covered':c.allow_incomplete?'Incomplete coverage allowed (testing)':'Surface coverage 100 % (section 2)')
   +it(c.judge=='manual'||models.length>0,c.judge=='manual'?'Manual judge: no model needed':'Model found','/anomaly')
+  +(c.pick=='act'?it(!!c.act_model,c.act_model?'ACT policy export chosen':'Choose an ACT policy export (Run)'):'')
   +`<div class="small muted so-also">Hand-feed: stand next to the robot with the object. Teleop: leader arm within reach.</div>`);
  setH('so-presum',nNo?`<span class="badge warn">${nNo} to fix</span>`:`<span class="badge ok">${ico('check')}Ready</span>`)}
+
+function actPanel(s,c){const box=$('so-act');if(box)box.hidden=c.pick!='act';if(c.pick!='act')return;
+ if(!POL)soPolicies(false);
+ const ex=(POL&&POL.exports)||[],dv=(POL&&POL.devices)||[],cur=c.act_model||'';
+ const lab=e=>`${e.name||e.id} · ${e.backend} · ${e.mtime}${e.cams?' · '+e.cams.join('+'):''}${e.source&&e.source!='studio'?' · models/':''}`;
+ const opts=[`<option value="">${POL?(ex.length?'Choose an export':'No export found'):'Looking for exports…'}</option>`].concat(ex.map(e=>`<option value="${esc(e.path)}">${esc(lab(e))}</option>`))
+  .concat(cur&&!ex.some(e=>e.path==cur)?[`<option value="${esc(cur)}">${esc('not found: '+cur)}</option>`]:[]).join('');
+ const sel=$('so-amodel'),sg=opts+cur;if(sel&&sg!=polSig&&document.activeElement!==sel){polSig=sg;sel.innerHTML=opts;delete sel.dataset.sv;syncCfg(c,true)}
+ const ds=$('so-adev');if(ds&&dv.length)[...ds.options].forEach(o=>{const ok=o.value=='AUTO'||dv.some(d=>d.startsWith(o.value));o.textContent=o.value+(ok?'':' · not found')});
+ const a=(s&&s.act)||{},sel1=ex.find(e=>e.path==cur);
+ setH('so-ahint',sel1?`Chunk ${esc(sel1.chunk??'?')} · cameras ${esc((sel1.cams||[]).join(', '))} · <code>${esc(sel1.path)}</code>${a.loaded?` · loaded: ${esc(a.loaded)}`:''}`
+  :`Studio's models (<code>${esc((POL&&POL.studio_dir)||'~/.local/share/physicalai/models')}/&lt;id&gt;/exports/…</code>) and <code>models/</code>.`);
+ setH('so-awarn',a.roi_warning?`<div class="callout warn">${ico('alert')}<span>${esc(a.roi_warning)}</span><a class="btn sm" href="/crop">Crop</a></div>`
+  :sel1&&sel1.backend=='torch'?`<div class="callout plain">${ico('info')}<span>The torch export runs on CPU or the Intel GPU (xpu) through Studio's Python; the OpenVINO export can also use the NPU.</span></div>`:'')}
 
 /* ---------- 4 · live cockpit ---------- */
 function cockpit(s){const sec=$('p-sort');
@@ -240,13 +272,16 @@ function cockpit(s){const sec=$('p-sort');
  setH('so-faces',RK.map(f=>chip(f,(cur.regions||{})[f]||0,nm,bad.has(f))).join(''));
  setH('so-seen',cur.cycle?`<span class=num>${esc(cur.seen_pct||0)} %</span>`:'');
  setH('so-msg',s.msg?`<span class="${s.ok===false?'so-bad':''}">${esc(s.msg)}</span>`:'');
+ const al=(s.act&&s.act.live)||{},last=(s.act&&s.act.last)||{};
+ setH('so-actlive',st=='act'&&al.steps?`<span>try <b class=num>${esc(al.attempt)}</b> of ${esc(al.of)}</span><span><b class=num>${esc(al.t)}</b> s</span><span><b class=num>${esc(al.inferences)}</b> inferences</span><span>chunk <b class=num>${esc(al.chunk)}</b></span><span>p50 <b class=num>${esc(al.infer_ms_p50??'–')}</b> ms · p95 <b class=num>${esc(al.infer_ms_p95??'–')}</b> ms</span>`
+  :(s.cfg||{}).pick=='act'&&last.infer_ms_p50!=null?`<span>last ACT pick: ${esc(last.n_attempts)} tr${last.n_attempts==1?'y':'ies'}</span><span>p50 <b class=num>${esc(last.infer_ms_p50)}</b> ms · p95 <b class=num>${esc(last.infer_ms_p95)}</b> ms per inference on ${esc(last.device||'')}</span>`:'');
  // manual judge
  const jb=$('so-judgebox');if(jb)jb.hidden=!s.judge;
  if(s.judge){setH('so-jcap',esc(s.judge_caption||''));const im=$('so-jimg');
   if(demoOf()){if(im){im.removeAttribute('src');im.dataset.ok=''}setH('so-jno','Sample · the photo to judge appears here')}
   else if(im&&im.dataset.n!=String(s.judge_n)){im.dataset.n=String(s.judge_n);im.onload=()=>{im.dataset.ok='1'};im.onerror=()=>{im.dataset.ok=''};im.src='/sort/judge.jpg?'+Date.now();setH('so-jno','Waiting for the photo')}}
  // keys
- const hk={handfeed:'so-kg',pick:'so-kg',help:'so-kn'}[st];
+ const hk={handfeed:'so-kg',pick:'so-kg',act:'so-kg',help:'so-kn'}[st];
  ['so-kg','so-kn'].forEach(id=>{const b=$(id);if(!b)return;b.classList.toggle('is-hl',id==hk);b.classList.toggle('is-dim',!s.active)});
  const sp=$('so-stop');if(sp)sp.hidden=!s.active;
  setH('so-live-r',s.active?`<span class="badge info"><span class=spin style="width:10px;height:10px"></span>running</span>`:'');
@@ -264,8 +299,8 @@ function results(s){
  setH('so-sess',s.session?`session <code>${esc(s.session)}</code>`:'no run yet');
  setH('so-tot',`<div class=kpi><div class=k>Good</div><div class="v ok">${tot.good||0}</div></div><div class=kpi><div class=k>Defect</div><div class="v err">${tot.defect||0}</div></div>
   <div class=kpi><div class=k>Aborted</div><div class="v${tot.aborted?' warn':''}">${tot.aborted||0}</div></div>`);
- setH('so-hist',hist.length?`<table><thead><tr><th>#</th><th>Verdict</th><th>Why</th><th>Photos</th><th>s</th><th>ms / inf.</th></tr></thead><tbody>`+hist.map(h=>
-  `<tr><td class=num>${esc(h.cycle)}</td><td class=${decCls(h.verdict)}>${esc(h.verdict)}</td><td class=so-why>${esc(h.reason)}</td><td class=num>${esc(h.photos)}</td><td class=num>${esc(h.t_auto_s)}</td><td class=num>${h.infer_ms_mean==null?'–':esc(h.infer_ms_mean)}</td></tr>`).join('')+'</tbody></table>'
+ setH('so-hist',hist.length?`<table><thead><tr><th>#</th><th>Verdict</th><th>Why</th><th>Photos</th><th>Pick s</th><th>s</th><th>ms / inf.</th><th>ACT ms</th></tr></thead><tbody>`+hist.map(h=>
+  `<tr><td class=num>${esc(h.cycle)}</td><td class=${decCls(h.verdict)}>${esc(h.verdict)}</td><td class=so-why>${esc(h.reason)}</td><td class=num>${esc(h.photos)}</td><td class=num>${h.t_pick_s==null?'–':esc(h.t_pick_s)}</td><td class=num>${esc(h.t_auto_s)}</td><td class=num>${h.infer_ms_mean==null?'–':esc(h.infer_ms_mean)}</td><td class=num title="ACT inference p50 per step">${h.act_infer_ms_p50==null?'–':esc(h.act_infer_ms_p50)}</td></tr>`).join('')+'</tbody></table>'
   :`<div class="card dashed so-none">No objects sorted in this session yet.</div>`);
  const ph=Array.isArray(s.photos)?s.photos:[],ps=JSON.stringify([ph,!!demoOf()]);
  if(ps!=photoSig){photoSig=ps;const t=Date.now();
@@ -296,13 +331,13 @@ function render(){if(!isOn('sort'))return;const a=armState(),s=sortState();
  const sec=$('p-sort');if(sec){sec.classList.toggle('so-off',!s);sec.classList.toggle('demo',!!demoOf())}
  const nt=plates(a,s);release(s);coverage(s);run(a,s);cockpit(s);results(s);head(a,s,nt)}
 
-expose({soCfg,soFaces,soRoi,soCal,soStart,soFlag,soJudge,soStop,soMirror,soDel,soPost:post});
+expose({soCfg,soFaces,soRoi,soCal,soStart,soFlag,soJudge,soStop,soMirror,soDel,soPolicies,soPost:post});
 PAGE.sort={
  init(){CFG.forEach(([id,k,chk])=>{const el=$(id);if(!el)return;
    el.onchange=()=>{if(!post('/sort/cfg?'+k+'='+encodeURIComponent(chk?(el.checked?1:0):el.value))){const s=sortState();if(s&&s.cfg)syncCfg(s.cfg,true)}}});
   const n=$('so-nobj');n.value=LS.get('sortN','1');n.oninput=()=>LS.set('sortN',n.value);
   live($('so-relimg'))},
- show(){faceSig=photoSig=roiSig=plateSig=brickSig='';render()},
+ show(){faceSig=photoSig=roiSig=plateSig=brickSig=polSig='';POL=null;render()},
  arm:render,
  sort(){gotSort=true;render()}};
 })();

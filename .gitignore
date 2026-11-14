@@ -30,3 +30,7 @@ tests/screenshots/
 node_modules/
 bench/results/*
 !bench/results/.gitkeep
+
+# OpenVINO compile cache and test-written settings
+anomaly_capture/openvino_cache/
+anomaly_capture/sort_settings.json

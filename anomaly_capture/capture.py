@@ -9,18 +9,28 @@ Run (Studio's Environments preview must be CLOSED so the cameras are free):
 
 Keys: B = empty background (all enabled cams; refused if a brick is in the area, Shift+B forces), G = good, D = defect (any size; measured later from pixels), U = undo last save.
 Drag on a camera's preview to redraw its detection area (saved per camera). Tick/untick cameras to include.
+
+Mock station (no hardware, separate data root; see docs/DEV.md and mock_hw.py):
+    JUNCTION_MOCK=1 [JUNCTION_PORT=7871] [JUNCTION_DATA_ROOT=...] python anomaly_capture/capture.py   (or --mock)
 """
-import json, threading, time
+import json, os, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pyrealsense2 as rs
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+
+MOCK = os.environ.get("JUNCTION_MOCK") == "1" or "--mock" in sys.argv   # hardware-free mock station (mock_hw.py)
+if MOCK:
+    os.environ["JUNCTION_MOCK"] = "1"     # arm.py picks the fake servo bus from this
+    import mock_hw
+else:
+    import pyrealsense2 as rs
+PORT = int(os.environ.get("JUNCTION_PORT", "7870"))
 
 CAMS = ["top", "front", "wrist"]
 RS_SERIAL = {"top": "243622063627", "front": "243622061066"}
@@ -43,6 +53,8 @@ PREVIEW_W = 640
 # (top brick ~20 px, front ~50 px, wrist ~30+ px at 1/4 scale)
 OPEN_K = {"top": 9, "front": 15, "wrist": 13}
 STALE_FRAC = 0.04    # >4% of the detection area differs from the background outside the brick -> warn "press B again"
+if MOCK:   # never touch the station's data/settings: everything goes to the mock data root
+    ROOT = mock_hw.install(ROOT); DATA = ROOT / "training_images"; SETTINGS = ROOT / "settings" / "cam_settings.json"
 
 
 def load_settings():
@@ -151,6 +163,7 @@ class WristCam:
 
 
 def open_cam(name):
+    if MOCK: return mock_hw.open_cam(name)
     try:
         return RSCam(name) if name in RS_SERIAL else WristCam()
     except Exception as e:      # a missing camera must not take the whole tool down
@@ -717,10 +730,12 @@ if __name__ == "__main__":
         crouter = collect.make_router(S, ARM, ACTX, DATA, ROOT)
         app.include_router(crouter)
         import sorter
-        app.include_router(sorter.make_router(S, ARM, ACTX, crouter.collector, DATA, ROOT))
-        print("control UI: http://127.0.0.1:7870/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
+        srouter = sorter.make_router(S, ARM, ACTX, crouter.collector, DATA, ROOT)
+        app.include_router(srouter)
+        if MOCK: mock_hw.attach(app, S, ARM, crouter.collector, srouter.sorter)
+        print(f"control UI: http://127.0.0.1:{PORT}/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
     except Exception as e:
         print("arm module not loaded:", e)
     print("live cameras:", S.live)
-    print("open http://127.0.0.1:7870")
-    uvicorn.run(app, host="127.0.0.1", port=7870, log_level="warning", timeout_graceful_shutdown=1)  # live streams never end on their own
+    print(f"open http://127.0.0.1:{PORT}" + ("   (MOCK STATION, no hardware)" if MOCK else ""))
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning", timeout_graceful_shutdown=1)  # live streams never end on their own

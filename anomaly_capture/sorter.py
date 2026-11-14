@@ -15,7 +15,7 @@ up / down, several ticks = diagonal view). What the fingers hide in one grip is 
 (wrist turned 90 deg); the top of the object is photographed from above while it lies released on the tape spot
 (wrist camera). The same poses therefore cover a cube, a long box, a triangular prism or a cylinder.
 
-One cycle:  PICK (hand-feed / teleop; ACT later) -> WP1
+One cycle:  PICK (hand-feed / teleop / ACT policy = phase 6, policy.py) -> WP1
             repeat:  WP2 poses that still show something unseen (the rest are skipped)   -> defect? stop
                      all seen? -> GOOD.   nothing more can be seen? -> DEFECT plate (fail-safe)
                      tape spot: set down -> top photo of the released brick -> grip again turned 90 deg
@@ -37,6 +37,7 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 
 import coverage as cov
+import policy as pol
 import prep
 from arm import BODY, TICK_PER_DEG, Stopped
 from collect import (HOLD_GAP, HOLD_MIN_OPEN, HOLD_STILL, HOLD_TIME, MATCH_DEG, MAX_PICK_S, REGRIP_SQUEEZE, TAIL_S)
@@ -94,7 +95,10 @@ class Sorter:
                     "t_low": 0.4, "t_high": 0.6, "retries": 2, "faces": {}, "allow_incomplete": False,
                     "release": True, "release_cam": "wrist", "cascade": False, "fast_variant": "_efficientad",
                     "fast_device": "NPU", "view_deg": cov.DEFAULTS["view_deg"], "finger_deg": cov.DEFAULTS["finger_deg"],
-                    "max_regrasps": cov.DEFAULTS["max_regrasps"]}
+                    "max_regrasps": cov.DEFAULTS["max_regrasps"],
+                    # pick = "act" (policy.py): Studio export dir, OpenVINO device, export backend, limits per pick
+                    "act_model": "", "act_device": "GPU", "act_backend": "auto", "act_mode": "chunk",
+                    "act_max_s": 20.0, "act_retries": 2, "act_speed": 1.0}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
         self.state, self.msg, self.ok = "idle", "teach the two plates, tick what each WP2 pose shows, then START", True
@@ -103,6 +107,7 @@ class Sorter:
         self.judge = {"img": None, "caption": "", "answer": None, "evt": threading.Event(), "n": 0}
         self.cur = {}; self.history = []; self.totals = {"good": 0, "defect": 0, "aborted": 0}
         self.photos = []; self.session = None; self.calib = {"running": False, "result": None}
+        self._pol = None; self.clock = pol.RealClock(); self.act = None; self.act_info = None; self._roiw = (0, None)
 
     def save_cfg(self): self.cfg_path.write_text(json.dumps(self.cfg, indent=1))
     def say(self, m, ok=True): self.msg, self.ok = m, ok
@@ -187,6 +192,44 @@ class Sorter:
         C.rise(wp1); C.goto(wp1, gripper=g_lock); time.sleep(0.3)
         if not C.holding(): raise RuntimeError("object not in the gripper at waypoint 1")
         return g_lock
+
+    def get_policy(self):
+        """The ACT export chosen on the page, loaded once (reloaded when model / device / backend change)."""
+        c = self.cfg; key = (c["act_model"], c["act_device"], c["act_backend"])
+        if self._pol and self._pol[0] == key: return self._pol[1]
+        self.drop_policy()
+        if not c["act_model"]: raise RuntimeError("pick = ACT: choose a policy export first")
+        self.state = "act_load"; self.say(f"loading the ACT policy on {c['act_device']} (the first load compiles, can take a minute)")
+        self._pol = (key, pol.load(c["act_model"], c["act_device"], c["act_backend"]))
+        return self._pol[1]
+
+    def drop_policy(self):
+        if self._pol: self._pol[1].close()
+        self._pol = None
+
+    def pick_act(self):
+        """Autonomous pick (phase 6): start pose -> the trained ACT policy until the fingers stall on the object
+        (the collector's hand-off rule) -> the scripted rise + carry to WP1 -> still held? Retries; after the last
+        one policy.PickFailed (the cycle asks for help). Latencies go into the cycle log (act_info)."""
+        P = self.get_policy(); c = self.cfg; b = c["brick"]
+        self.state = "act"; self.flags["grasped"] = False; self.act_info = None
+        self.act = pol.ActPick(self.A, self.C, self.S, P, max_s=c["act_max_s"], retries=c["act_retries"], mode=c["act_mode"],
+                               speed=c["act_speed"], task=f"pick up the {b} brick" if b else "pick up the brick",
+                               check=self.check, grasped=lambda: bool(self.flags["grasped"]), say=self.say, clock=self.clock)
+        try:
+            g_lock, self.act_info = self.act.run()
+        except pol.PickFailed as e:
+            self.act_info = e.info; raise
+        return g_lock
+
+    def pick(self):
+        p = self.cfg["pick"]
+        return self.pick_act() if p == "act" else self.pick_teleop() if p == "teleop" else self.pick_handfeed()
+
+    def roi_warning(self):
+        if time.time() - self._roiw[0] > 10:
+            self._roiw = (time.time(), pol.roi_warning(self.C, getattr(self.C, "EP", self.RUNS.parent / "episodes")))
+        return self._roiw[1]
 
     # ------------------------------------------------------------------ one photo -> decision
     def _photo(self, kind, cam):
@@ -366,10 +409,12 @@ class Sorter:
         cycle_dir = self.RUNS / self.session / f"cycle{idx:03d}"; cycle_dir.mkdir(parents=True, exist_ok=True)
         self.cur = {"cycle": idx, "steps": [], "regions": {}, "grip": 1, "verdict": None, "seen_pct": 0}
         if A.mode != "hold": A.set_mode("hold", force=True)
-        t0 = time.perf_counter()
-        g_lock = self.pick_teleop() if self.cfg["pick"] == "teleop" else self.pick_handfeed()
+        t0 = time.perf_counter(); failed = None
+        try: g_lock = self.pick()
+        except pol.PickFailed as e: failed = e                  # the autonomous pick gave up: ask for help below
         t1 = time.perf_counter()
         try:
+            if failed: raise Lost()
             res = self.inspect(g_lock, g_open, cycle_dir)
             t2 = time.perf_counter()
             self.cur["verdict"] = res["verdict"]
@@ -379,9 +424,10 @@ class Sorter:
             res = {"verdict": "aborted", "reason": "the object is no longer in the gripper (dropped)", "lost": True,
                    "steps": self.cur.get("steps", []), "regions": self.cur.get("regions", {}),
                    "seen_pct": self.cur.get("seen_pct", 0), "regrasps": self.cur.get("grip", 1) - 1}
+            if failed: res.update({"reason": str(failed), "lost": False, "pick_failed": True})
             self.cur["verdict"] = "aborted"
         res.pop("g_lock", None)
-        C.goto(home, gripper=g_open)
+        if not failed or failed.retry: C.goto(home, gripper=g_open)      # BLOCKED / camera gone: don't move
         t3 = time.perf_counter()
         infer = [s["infer_ms"] for st in res["steps"] for sh in st["shots"] for s in sh.get("stages", [])]
         rec = {"cycle": idx, "time": datetime.now().isoformat(timespec="seconds"), "brick": self.cfg["brick"],
@@ -393,15 +439,19 @@ class Sorter:
                "infer_ms_mean": round(float(np.mean(infer)), 2) if infer else None,
                "infer_ms_max": round(float(np.max(infer)), 2) if infer else None,
                "infer_ms_total": round(float(np.sum(infer)), 2) if infer else None}
+        if self.cfg["pick"] == "act" and self.act_info:              # policy latency per inference step (efficiency)
+            rec.update({"act": self.act_info, "act_infer_ms_p50": self.act_info.get("infer_ms_p50"),
+                        "act_infer_ms_p95": self.act_info.get("infer_ms_p95"), "act_attempts": self.act_info.get("n_attempts")})
         with open(self.RUNS / self.session / "log.jsonl", "a") as f: f.write(json.dumps(rec) + "\n")
         self.totals[res["verdict"]] = self.totals.get(res["verdict"], 0) + 1
-        self.history = ([{k: rec[k] for k in ("cycle", "verdict", "reason", "photos", "t_auto_s", "infer_ms_mean")}]
+        self.history = ([{k: rec.get(k) for k in ("cycle", "verdict", "reason", "photos", "t_auto_s", "infer_ms_mean", "t_pick_s",
+                                                  "act_infer_ms_p50")}]
                         + self.history)[:15]
         self.say(f"object {idx}: {res['verdict'].upper()} - {res['reason']} ({rec['t_auto_s']} s after the pick)",
                  res["verdict"] != "aborted")
         if res["verdict"] == "aborted":
             self.state = "help"; self.flags["next"].clear()
-            where = "is on the tape spot" if res.get("on_tape") else "was dropped"
+            where = "is on the tape spot" if res.get("on_tape") else "was not picked" if res.get("pick_failed") else "was dropped"
             self.say(f"the object {where} ({res['reason']}): put it back on the input plate, then NEXT", False)
             while not self.flags["next"].wait(0.1): self.check()
         return rec
@@ -414,6 +464,7 @@ class Sorter:
         (self.RUNS / self.session / "settings.json").write_text(json.dumps({**self.cfg, "plan": self.plan()}, indent=1))
         self.totals = {"good": 0, "defect": 0, "aborted": 0}
         try:
+            if self.cfg["pick"] == "act": self.get_policy()           # load / compile before the first cycle
             for i in range(1, n + 1):
                 self.cycle(i)
                 time.sleep(0.5)
@@ -486,7 +537,10 @@ class Sorter:
                 "cur": self.cur, "totals": self.totals, "history": self.history, "session": self.session,
                 "judge": self.judge["img"] is not None, "judge_caption": self.judge["caption"], "judge_n": self.judge["n"],
                 "photos": [c for c, _ in self.photos], "calib": self.calib, "region_names": cov.REGION_NAMES,
-                "live": self.S.live}
+                "live": self.S.live,
+                "act": {"loaded": self._pol[1].label if self._pol else None, "live": self.act.live if self.act else {},
+                        "last": {k: v for k, v in (self.act_info or {}).items() if k != "attempts"},
+                        "roi_warning": self.roi_warning() if self.cfg["pick"] == "act" else None}}
 
 
 def make_router(S, A, ctx, C, DATA, ROOT):
@@ -511,6 +565,12 @@ def make_router(S, A, ctx, C, DATA, ROOT):
             return bad(f"with these poses {', '.join(pl['missing'])} can never be fully seen ({pl['seen_pct']} % of the surface "
                        "is covered): add / tick WP2 poses, teach the tape spot, enable the top photo "
                        "(or tick 'allow incomplete' to test - such objects always go to DEFECT)")
+        if T.cfg["pick"] == "act":
+            try:
+                d = pol.describe(pol.resolve(T.cfg["act_model"] or "-", T.cfg["act_backend"])[0]) or {}
+                miss = [c for c in d.get("cams", []) if c not in S.live]
+                if miss: return bad(f"the ACT policy needs camera {', '.join(miss)}, which is not live")
+            except Exception as e: return bad(f"pick = ACT: {e}" if T.cfg["act_model"] else "pick = ACT: choose a policy export first")
         if T.cfg["judge"] == "model":
             try:
                 T.scorer.find(T.cfg["cam"], T.cfg["brick"])
@@ -519,6 +579,18 @@ def make_router(S, A, ctx, C, DATA, ROOT):
             except Exception as e: return bad(str(e))
         threading.Thread(target=T.run, args=(max(1, n),), daemon=True).start()
         time.sleep(0.1); return T.status()
+
+    @r.get("/sort/policies")
+    def policies():
+        """Policy exports for pick = ACT: Studio's models dir (~/.local/share/physicalai/models/<id>/exports/<backend>)
+        and ROOT/models, plus the OpenVINO devices this PC has."""
+        try:
+            import openvino as ov
+            devs = ov.Core().available_devices
+        except Exception: devs = []
+        try: ex = pol.find_exports([ROOT / "models"])
+        except Exception as e: ex = []; T.say(f"listing policy exports failed: {e}", False)
+        return {"exports": ex, "devices": devs, "studio_dir": str(pol.STUDIO_MODELS), "selected": T.cfg["act_model"]}
 
     @r.post("/sort/stop")
     def stop():
@@ -573,8 +645,19 @@ def make_router(S, A, ctx, C, DATA, ROOT):
     @r.post("/sort/cfg")
     def cfg(pick: str = "", judge: str = "", brick: str = None, device: str = "", t_low: float = -1, t_high: float = -1,
             retries: int = -1, allow_incomplete: int = -1, release: int = -1, release_cam: str = "", cascade: int = -1,
-            fast_device: str = "", view_deg: float = -1, finger_deg: float = -1, max_regrasps: int = -1):
-        if pick in ("handfeed", "teleop"): T.cfg["pick"] = pick
+            fast_device: str = "", view_deg: float = -1, finger_deg: float = -1, max_regrasps: int = -1,
+            act_model: str = None, act_device: str = "", act_backend: str = "", act_mode: str = "", act_max_s: float = -1,
+            act_retries: int = -1, act_speed: float = -1):
+        if pick in ("handfeed", "teleop", "act"): T.cfg["pick"] = pick
+        if act_model is not None: T.cfg["act_model"] = act_model.strip()
+        if act_device in pol.DEVICES: T.cfg["act_device"] = act_device
+        if act_backend in ("auto",) + pol.BACKENDS: T.cfg["act_backend"] = act_backend
+        if act_mode in pol.MODES: T.cfg["act_mode"] = act_mode
+        if 2 <= act_max_s <= 120: T.cfg["act_max_s"] = act_max_s
+        if 0 <= act_retries <= 5: T.cfg["act_retries"] = act_retries
+        if 0.1 <= act_speed <= 1: T.cfg["act_speed"] = act_speed
+        if T._pol and T._pol[0] != (T.cfg["act_model"], T.cfg["act_device"], T.cfg["act_backend"]) and not T.active:
+            T.drop_policy()
         if judge in ("manual", "model"): T.cfg["judge"] = judge
         if brick is not None: T.cfg["brick"] = brick.strip()
         if device in ("CPU", "GPU", "NPU", "AUTO"): T.cfg["device"] = device

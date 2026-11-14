@@ -42,6 +42,25 @@ def act_frame(img, roi):
     return cv2.resize(img[y0:y1, x0:x1], (ACT_W, ACT_H), interpolation=cv2.INTER_AREA)
 
 
+ACT_JPEG_Q = 93             # collect.py stores every recorded policy frame as JPEG at this quality
+
+
+def act_jpeg(img, roi):
+    """What collect.py writes per recorded frame: the policy crop as JPEG bytes."""
+    return cv2.imencode(".jpg", act_frame(img, roi), [cv2.IMWRITE_JPEG_QUALITY, ACT_JPEG_Q])[1].tobytes()
+
+
+def act_policy_image(img, roi, jpeg=True):
+    """THE live ACT image input: exactly what export_act.py gives Studio for training, from a full-res BGR frame.
+    Training path: act_jpeg() -> episodes/.../<cam>/NNNNNN.jpg -> cv2.imread -> BGR2RGB (export_act.py).
+    jpeg=True repeats the JPEG round trip so even the compression artefacts match. Returns 480x640x3 uint8 RGB."""
+    if jpeg:
+        bgr = cv2.imdecode(np.frombuffer(act_jpeg(img, roi), np.uint8), cv2.IMREAD_COLOR)
+    else:
+        bgr = act_frame(img, roi)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
 def fill_holes(mask):
     """Fill everything enclosed by the outer outline (the pen cross / depth holes inside the brick stay IN)."""
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

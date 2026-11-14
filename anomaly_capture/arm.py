@@ -15,7 +15,7 @@ Positions are raw servo ticks of the follower (no calibration file needed: the r
 taught). Leader->follower mirroring uses the same convention as LeRobot/Studio ("degrees" mode: offset from the
 middle of each joint's recorded range; gripper: fraction of its range), read from each servo's EEPROM limits.
 """
-import json, random, threading, time
+import json, os, random, threading, time
 from datetime import datetime
 from pathlib import Path
 
@@ -25,8 +25,11 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 import prep
-from lerobot.motors.feetech.feetech import FeetechMotorsBus
-from lerobot.motors.motors_bus import Motor, MotorNormMode
+if os.environ.get("JUNCTION_MOCK") == "1":      # hardware-free mock station: simulated servos (mock_hw.py, docs/DEV.md)
+    from mock_hw import FeetechMotorsBus, Motor, MotorNormMode
+else:
+    from lerobot.motors.feetech.feetech import FeetechMotorsBus
+    from lerobot.motors.motors_bus import Motor, MotorNormMode
 
 JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 BODY = JOINTS[:-1]

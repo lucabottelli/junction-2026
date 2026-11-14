@@ -15,7 +15,7 @@
  <div class="todo so-todo"><div class=todo-h>What to do</div><ol>
   <li><span><b>Teach the two plates.</b> Holding an object with the leader, save the release pose about 3 cm above each plate.</span></li>
   <li><span><b>Tick what each WP2 photo pose shows</b> until the surface coverage reads 100 %. Front, back and down are the minimum, plus the tape spot.</span></li>
-  <li><span><b>Choose how to pick and judge.</b> Hand-feed with the manual judge tests every motion before a model exists. Then press <b>Start</b>.</span></li>
+  <li><span><b>Choose how to pick and judge.</b> Hand-feed with the manual judge tests every motion before a model exists; <b>ACT policy</b> picks by itself once a policy is trained and exported in Studio. Then press <b>Start</b>.</span></li>
   <li><span><b>Follow the cockpit.</b> Hand-feed: put the object between the open fingers and press <b>G</b>. Manual judge: answer each photo with <b>C</b>, <b>D</b> or <b>U</b>.</span></li>
   <li><span><b>After training a model,</b> calibrate the thresholds below, then switch the judge to <b>Model</b>.</span></li>
  </ol></div>
@@ -94,8 +94,24 @@
   <div class=split>
    <div class="card so-runcard">
     <div class=field><label>Pick</label><div class="seg full" id=so-pick>
-     <button data-v=handfeed onclick="soCfg('pick','handfeed')">Hand-feed</button><button data-v=teleop onclick="soCfg('pick','teleop')">Teleop with the leader</button><button data-v=act disabled title="Phase 6, later">ACT policy · later</button></div>
+     <button data-v=handfeed onclick="soCfg('pick','handfeed')">Hand-feed</button><button data-v=teleop onclick="soCfg('pick','teleop')">Teleop with the leader</button><button data-v=act onclick="soCfg('pick','act')">ACT policy · autonomous</button></div>
      <div class=hint id=so-pickhint></div></div>
+    <div class="so-act" id=so-act hidden>
+     <div class=field><label for=so-amodel>Policy export</label>
+      <div class=so-arow><select id=so-amodel></select><button class="btn sm ghost" onclick="soPolicies(true)" title="Look for exports again">Refresh</button></div>
+      <div class=hint id=so-ahint>Studio's models (<code>~/.local/share/physicalai/models/&lt;id&gt;/exports/…</code>) and <code>models/</code>.</div></div>
+     <div class=fields2>
+      <div class=field><label for=so-adev>Device</label><select id=so-adev><option>GPU</option><option>CPU</option><option>NPU</option><option>AUTO</option></select></div>
+      <div class=field><label for=so-amode>Execution</label><select id=so-amode><option value=chunk>Chunks · as Studio's Run model</option><option value=async>Chunks, inference alongside</option><option value=ensemble>Temporal ensembling</option></select></div>
+     </div>
+     <div class=so-thr>
+      <div class=field><label for=so-amax>Seconds per try</label><input id=so-amax type=number min=2 max=120></div>
+      <div class=field><label for=so-aret>Retries</label><input id=so-aret type=number min=0 max=5></div>
+      <div class=field><label for=so-aspd>Speed limit</label><input id=so-aspd type=number step=0.1 min=0.1 max=1></div>
+     </div>
+     <div class=hint>The hand-off is the same as when recording: once the fingers stall on the object the robot lifts it to waypoint 1 itself. Speed 1 = the teleop speed of the demos. Space stops the arm at any moment.</div>
+     <div id=so-awarn></div>
+    </div>
     <div class=field><label>Defect judge</label><div class="seg full" id=so-judge>
      <button data-v=manual onclick="soCfg('judge','manual')">Manual · you answer C / D / U</button><button data-v=model onclick="soCfg('judge','model')">Anomalib model · OpenVINO</button></div></div>
     <div class=so-model id=so-model>
@@ -138,6 +154,7 @@
    </div>
    <div class=so-livecov><div class=so-k>Surface seen clean <span id=so-seen></span></div><div class=so-chips id=so-faces></div></div>
    <div class=so-msg id=so-msg></div>
+   <div class=so-actlive id=so-actlive></div>
   </div>
 
   <div class=so-judge id=so-judgebox hidden>

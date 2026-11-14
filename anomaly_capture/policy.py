@@ -50,7 +50,7 @@ import numpy as np
 
 import prep
 from arm import BLOCKED, BODY, JOINTS, MIRROR_VMAX, TICK_PER_DEG, Stopped
-from collect import FPS, TAIL_S, GraspDetector
+from collect import FPS, HOLD_GAP, REGRIP_SQUEEZE, TAIL_S, GraspDetector
 from export_act import POLICY_CAMS, denormalize, normalize
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +65,8 @@ ENSEMBLE_COEFF = 0.01      # ACT paper / LeRobot value
 MAX_LEAD_DEG = 25          # body targets are kept within this of the actual joint position
 BLOCK_S = 1.0              # arm > arm.BLOCKED ticks behind its target this long = something in the way
 CAM_MAX_AGE_S = 0.5        # older frame = camera stalled (export_act rejects such training episodes too)
+SOFT_GAP = HOLD_GAP // 2   # second hand-off rule: fingers stalled with the target only this far past them ...
+SOFT_HOLD_S = 0.6          # ... for this long (a policy can squeeze less than the human in the demos). 0 = off
 SINGLE_CAM = "top"         # camera for an export with one unnamed "images" input
 
 
@@ -389,10 +391,13 @@ class ActPick:
             self.A.mode = "hold"; self.A.goal = tgt
 
     def attempt(self, k):
-        """Drive with the policy from the start pose until the hand-off. -> 'grasp' | 'manual' | 'timeout'."""
+        """Drive with the policy from the start pose until the hand-off.
+        -> 'grasp' (the demos' stall rule) | 'grasp_soft' (stalled on something, but squeezing only lightly, for
+        SOFT_HOLD_S) | 'manual' (G) | 'timeout'."""
         A, clk = self.A, self.clock
         self.p.reset(); self.ex.reset()
         det = GraspDetector(A.fl["gripper"][0]); t0 = clk.now(); i = 0; done_at = None; why = "timeout"
+        soft = GraspDetector(A.fl["gripper"][0], gap=SOFT_GAP, hold=SOFT_HOLD_S) if SOFT_HOLD_S else None
         lag_since = None; late = 0; dts = []; last = t0
         A.vmax = MIRROR_VMAX * max(0.1, min(1.0, self.speed))
         while True:
@@ -408,6 +413,7 @@ class ActPick:
             if done_at is None:
                 if self.grasped(): done_at, why = now, "manual"
                 elif det.update(now, A.pos["gripper"], A.goal["gripper"]): done_at, why = now, "grasp"
+                elif soft and soft.update(now, A.pos["gripper"], A.goal["gripper"]): done_at, why = now, "grasp_soft"
             self.live = {"attempt": k + 1, "of": self.retries + 1, "t": round(t, 1), "steps": i + 1, **self.ex.stats()}
             if done_at is not None and now - done_at >= TAIL_S: break     # keep closing a little longer, as in the demos
             if done_at is None and t > self.max_s: break
@@ -436,6 +442,9 @@ class ActPick:
                     reasons.append(f"no grasp within {self.max_s:.0f} s")
                 else:
                     C.hold_here(); g_lock = A.cmd["gripper"]
+                    if why == "grasp_soft":                 # light squeeze: clamp as firmly as the tape re-grip does
+                        g_lock = max(gmin, min(g_lock, A.pos["gripper"] - REGRIP_SQUEEZE))
+                        C.goto(dict(A.cmd), 0.5, gripper=g_lock)
                     self.say("hand-off: the robot lifts the object to waypoint 1")
                     C.rise(wp1); C.goto(wp1, gripper=g_lock); self.clock.sleep_until(self.clock.now() + 0.3)
                     if C.holding():

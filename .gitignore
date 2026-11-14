@@ -1,0 +1,10 @@
+# Large, machine-generated data: NOT in git (hundreds of MB to GB; copy separately, see README)
+training_images/
+episodes/
+
+# runtime junk
+__pycache__/
+*.pyc
+anomaly_capture/capture.log
+.venv/
+*.part

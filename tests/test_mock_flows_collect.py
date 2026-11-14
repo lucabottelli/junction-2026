@@ -103,3 +103,26 @@ def test_discard_next_and_stop_mid_pick_then_recover(connected):
     srv.post("/collect/start", n=1, brick="green")
     c = run_until_idle(srv)
     assert c["state"] == "done" and c["done"] == 1, c["msg"]
+
+
+def test_blocked_carry_pauses_run_then_stop_and_resume(connected):
+    """A failed episode (BLOCKED in the carry) pauses the run for N instead of ending it; STOP keeps the session
+    resumable, and RESUME finishes the same session up to its target."""
+    srv = connected
+    srv.post("/mock/scene", reset=True); srv.post("/collect/cfg", speed=1.0, phase2="false")
+    s = srv.post("/collect/start", n=2, brick="blue", label="good"); assert s["active"], s["msg"]
+    srv.wait(lambda: srv.get("/collect/status")["state"] == "carry", 90, "carry")
+    srv.post("/mock/fault", obstacle=1)
+    c = srv.wait(lambda: (lambda x: x if x["state"] in ("reset", "error", "stopped", "done") else None)(srv.get("/collect/status")),
+                 120, "paused after BLOCKED")
+    assert c["state"] == "reset" and c["active"] and c["info"]["why"] == "blocked" and c["fails"] == 1, c
+    srv.post("/mock/fault", obstacle=0); srv.post("/mock/scene", reset=True); srv.post("/collect/flag/next")
+    srv.wait(lambda: srv.get("/collect/status")["state"] == "pick", 60, "next pick after N")
+    time.sleep(0.5)
+    srv.post("/collect/stop")
+    c = srv.wait(lambda: (lambda x: x if not x["active"] else None)(srv.get("/collect/status")), 15, "stopped")
+    r = c["resume"]; assert r and r["session"] == c["session"] and r["target"] == 2 and r["done"] == 0, c
+    srv.post("/mock/scene", reset=True)
+    s = srv.post("/collect/start", n=2, brick="", resume=r["session"]); assert s["active"] and s["session"] == r["session"], s["msg"]
+    c = run_until_idle(srv, 300)
+    assert c["state"] == "done" and c["done"] == 2 and c["resume"] is None, c["msg"]

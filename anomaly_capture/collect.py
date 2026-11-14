@@ -74,6 +74,7 @@ class Collector:
         self.active = False; self.stop_flag = threading.Event()
         self.flags = {"grasped": False, "discard": False, "skip": False, "next": threading.Event()}
         self.session = None; self.n_done = 0; self.target = 0; self.rec = None
+        self.fails = 0; self.attempt = 0   # failed episodes in this run (paused for N, run continues) · episode number being attempted
         self.g_relock = None      # clamp command after the last tape re-grip (grip_on_tape)
 
     def save_cfg(self): self.cfg_path.write_text(json.dumps(self.cfg, indent=1))
@@ -270,8 +271,9 @@ class Collector:
         while True:
             self.check()
             lt = A.leader_target()
-            gaps = {n: abs(lt[n] - A.cmd[n]) / TICK_PER_DEG for n in BODY}
-            self.info = {"gaps": {k: round(v, 1) for k, v in gaps.items()}}
+            signed = {n: (lt[n] - A.cmd[n]) / TICK_PER_DEG for n in BODY}       # leader - follower, degrees
+            gaps = {n: abs(v) for n, v in signed.items()}
+            self.info = {"gaps": {k: round(v, 1) for k, v in gaps.items()}, "signed": {k: round(v, 1) for k, v in signed.items()}}
             worst = max(gaps, key=gaps.get)
             if gaps[worst] <= MATCH_DEG: ok_since = ok_since or time.time()
             else: ok_since = None
@@ -316,7 +318,7 @@ class Collector:
                 time.sleep(TAIL_S)
                 self.hold_here(); g_lock = A.cmd["gripper"]          # clamp command fixed from here on
                 grasp_pose = dict(A.cmd)                             # where the brick was: put it back here later
-                self.state = "carry"; self.say("● REC  robot carries the brick to waypoint 1: hands off")
+                self.state = "carry"; self.say("● REC  robot carries the brick to waypoint 1: let go of the leader and put it back in its rest position")
                 self.rise(wp1)
                 self.goto(wp1, gripper=g_lock)
                 time.sleep(0.3)
@@ -330,21 +332,17 @@ class Collector:
         if reason in ("discard", "timeout"):
             meta["outcome"] = reason
             threading.Thread(target=self._write, args=(self.EP / self.session / ep_id, buf, meta), daemon=True).start()
-            self.state = "reset"; self.flags["next"].clear()
-            self.say(f"episode {reason}ed: put the brick back on the orange plate (by hand or with the leader), then NEXT", False)
-            A.set_mode("mirror", force=True)          # let the human fix the scene with the leader
-            while not self.flags["next"].wait(0.1): self.check()
-            A.set_mode("hold", force=True)
+            self.recover(reason, "pick discarded (X)" if reason == "discard" else f"no grasp within {MAX_PICK_S} s")
             return False
 
         if not self.holding():
             meta["outcome"] = "missed"
             threading.Thread(target=self._write, args=(self.EP / self.session / ep_id, buf, meta), daemon=True).start()
-            self.goto(home, gripper=g_open)
-            self.say("brick NOT in the gripper at waypoint 1: episode marked 'missed' (not used for training)", False)
-            time.sleep(1.5); return False
+            self.recover("missed", "the brick was not in the gripper at waypoint 1 (episode not used for training)")
+            return False
         meta["outcome"] = "success"; meta["gripper_lock"] = round(g_lock, 1)
         threading.Thread(target=self._write, args=(self.EP / self.session / ep_id, buf, meta), daemon=True).start()
+        self.n_done += 1          # counted the moment it is saved (a STOP / BLOCKED during the put-back must not lose it)
 
         # 2 PHASE 2: WP1 -> above WP2 -> down -> photo -> up -> tape spot: set down, re-grip turned 90 deg
         #   -> above WP2 -> down -> photo of the rotated brick -> up.  Clamp command identical throughout.
@@ -407,14 +405,14 @@ class Collector:
             self.goto(home, gripper=g_open); time.sleep(1.0); return
         jit = random.uniform(-1, 1) * self.cfg["roll_jitter"] * TICK_PER_DEG
         if drops:
-            self.say("resetting: robot drops the brick at a random reset spot on the orange plate")
+            self.say("resetting: robot drops the brick at a random reset spot · put the leader back in its rest position")
             self.goto(wp1, gripper=g_lock)
             d = random.choice(drops)["pos"]
             self.goto(d, gripper=g_lock, wrist_roll=d["wrist_roll"] + jit)
             self.goto(dict(A.cmd), 1.0, gripper=g_open); time.sleep(0.2)      # release
             self.rise(wp1)
         else:
-            self.say("resetting: robot puts the brick back where it picked it, turned a bit")
+            self.say("resetting: robot puts the brick back where it picked it, turned a bit · put the leader back in its rest position")
             self.goto(wp1, gripper=g_lock)
             above = {**grasp_pose, "shoulder_lift": wp1["shoulder_lift"], "elbow_flex": wp1["elbow_flex"],
                      "wrist_flex": wp1["wrist_flex"]}
@@ -425,18 +423,71 @@ class Collector:
             self.goto(above, self.cfg["speed"] * 0.6, gripper=g_open, wrist_roll=roll)          # straight up
         self.goto(home, gripper=g_open)
 
-    # ------------------------------------------------------------------ session
-    def run(self, n, brick, label):
+    # ------------------------------------------------------------------ recovery: a failed episode pauses, it never ends the run
+    WHY = {"blocked": "BLOCKED", "missed": "MISSED", "discard": "DISCARDED", "timeout": "TIMED OUT", "error": "ERROR"}
+
+    def recover(self, why, detail):
+        """Pause the run so the human can fix the scene: the follower copies the leader (creeping slowly at first),
+        N continues with the next episode. Only STOP (Stopped) or a lost arm/leader (exception) ends the run."""
+        A = self.A; self.fails += 1
+        self.state = "reset"; self.flags["next"].clear(); self.info = {"why": why, "detail": detail}
+        self.say(f"{self.WHY.get(why, why.upper())}: {detail} · the robot copies the leader slowly: fix the scene, "
+                 "put the brick back on the orange plate, put the leader in its rest position, then N", False)
+        if A.f is None: raise RuntimeError("the arm is disconnected")
+        A.set_mode("mirror", force=True)
+        while not self.flags["next"].wait(0.1): self.check()
+        A.set_mode("hold", force=True)
+        self.info = {}
+
+    # ------------------------------------------------------------------ session (resumable: session.json + episodes on disk)
+    def session_info(self, name):
+        d = self.EP / name
+        try: si = json.loads((d / "session.json").read_text())
+        except Exception: return None
+        done = 0; n_eps = 0
+        for md in d.glob("*/meta.json"):
+            n_eps += 1
+            try: done += json.loads(md.read_text()).get("outcome") == "success"
+            except Exception: pass
+        return {"session": name, "brick": si.get("brick"), "label": si.get("label"), "done": done,
+                "target": int(si.get("target") or 0), "episodes": n_eps}
+
+    def resumable(self):
+        """The most recent session, if it ended before reaching its target (survives server restarts)."""
+        if self.active: return None
+        for d in sorted((x for x in self.EP.glob("*") if (x / "session.json").exists()), key=lambda x: x.name, reverse=True)[:1]:
+            si = self.session_info(d.name)
+            if si and si["done"] < si["target"]: return {k: si[k] for k in ("session", "brick", "label", "done", "target")}
+        return None
+
+    def run(self, n, brick, label, resume=None):
         self.active = True; self.A.running = True; self.stop_flag.clear(); self.A.stop.clear()
-        self.session = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{brick}"; self.n_done = 0; self.target = n
-        idx = 0
+        self.fails = 0; self.info = {}
+        si = self.session_info(resume) if resume else None
+        if si:
+            self.session = resume; self.n_done = si["done"]; idx = si["episodes"]
+            brick, label = si["brick"] or brick, si["label"] or label
+        else:
+            self.session = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{brick}"; self.n_done = 0; idx = 0
+        self.target = n
+        sj = self.EP / self.session / "session.json"; sj.parent.mkdir(parents=True, exist_ok=True)
+        try: started = json.loads(sj.read_text()).get("started")
+        except Exception: started = None
+        sj.write_text(json.dumps({"brick": brick, "label": label, "target": n,
+                                  "started": started or datetime.now().isoformat(timespec="seconds")}, indent=1))
         try:
             while self.n_done < n:
-                idx += 1
-                if self.episode(idx, brick, label): self.n_done += 1
-            self.state = "done"; self.say(f"✓ DONE: {self.n_done} successful episodes in {self.session}")
+                idx += 1; self.attempt = idx
+                try:
+                    self.episode(idx, brick, label)       # counts its own success in n_done when it is saved
+                except Stopped: raise
+                except Exception as e:                       # BLOCKED, motion error, ...: pause for the human, then go on
+                    m = str(e)
+                    self.recover("blocked" if "BLOCKED" in m else "error", m.replace("BLOCKED: ", "", 1))
+            self.state = "done"; self.say(f"✓ DONE: {self.n_done} successful episodes in {self.session}"
+                                          + (f" ({self.fails} failed attempt{'s' * (self.fails != 1)} skipped)" if self.fails else ""))
         except Stopped:
-            self.state = "stopped"; self.say(f"STOPPED ({self.n_done} successful episodes saved): arm holds its position", False)
+            self.state = "stopped"; self.say(f"STOPPED: {self.n_done} of {self.target} episodes saved, arm holds its position · RESUME continues this session", False)
         except Exception as e:
             self.state = "error"; self.say(f"ERROR: {e} (arm holds its position)", False)
         finally:
@@ -464,7 +515,8 @@ def make_router(S, A, ctx, DATA, ROOT):
         return {"state": C.state, "msg": C.msg, "ok": C.ok, "info": C.info, "active": C.active, "done": C.n_done,
                 "target": C.target, "session": C.session, "cfg": C.cfg, "connected": A.f is not None,
                 "routines": list(ctx.R["routines"]), "sessions": sessions, "live": S.live,
-                "export_running": export["proc"] is not None, "export_log": export["log"][-4000:]}
+                "export_running": export["proc"] is not None, "export_log": export["log"][-4000:],
+                "resume": C.resumable(), "fails": C.fails, "attempt": C.attempt}
 
     @r.get("/collect")
     def page(): return RedirectResponse("/record")      # the UI lives at / now (ui.py, web/)
@@ -485,9 +537,13 @@ def make_router(S, A, ctx, DATA, ROOT):
     def st(): return status()
 
     @r.post("/collect/start")
-    def start(n: int = 10, brick: str = "", label: str = "good"):
+    def start(n: int = 10, brick: str = "", label: str = "good", resume: str = ""):
         if C.active: C.say("already running", False); return status()
-        if A.f is None: C.say("connect the arm on /arm first", False); return status()
+        if A.f is None: C.say("connect the arm first (step 1, Connect)", False); return status()
+        if resume:
+            si = C.session_info(Path(resume).name)
+            if not si: C.say(f"can't resume '{resume}': no such session", False); return status()
+            brick, label, resume = si["brick"] or brick, si["label"] or label, si["session"]
         if not brick.strip(): C.say("type the brick name first", False); return status()
         try:
             for k in ("home", "wp1"): C.wps(k)
@@ -496,7 +552,7 @@ def make_router(S, A, ctx, DATA, ROOT):
                 raise RuntimeError("re-grip is on: teach the tape spot (above + on) first, or switch the re-grip off")
         except Exception as e:
             C.say(str(e), False); return status()
-        threading.Thread(target=C.run, args=(max(1, n), brick.strip(), label), daemon=True).start()
+        threading.Thread(target=C.run, args=(max(1, n), brick.strip(), label, resume or None), daemon=True).start()
         time.sleep(0.1); return status()
 
     @r.post("/collect/test_wp2")
@@ -511,7 +567,9 @@ def make_router(S, A, ctx, DATA, ROOT):
         time.sleep(0.06)
         if A.f:
             with A.io: A.mode = "hold"; A.goal = dict(A.cmd)
-        C.say("STOPPED: arm holds its position", False); return status()
+        C.say(f"STOPPED: {C.n_done} of {C.target} episodes saved, arm holds its position · RESUME continues this session"
+              if C.session and C.target and C.n_done < C.target else "STOPPED: arm holds its position", False)
+        return status()
 
     @r.post("/collect/flag/{flag}")
     def flag(flag: str):

@@ -5,7 +5,8 @@
 const SLOTS={
  home:{t:'Start pose',s:'Start',single:1,
   d:'Every episode starts here and the robot returns here after the put-back.',
-  how:'Gripper open, arm lifted back and out of the way so the top camera sees the whole orange plate.'},
+  how:'Gripper open, arm lifted back and out of the way so the top camera sees the whole orange plate.',
+  tip:'Teach the start pose with the leader lying in its natural rest position (Mirror on, set the leader down, Save). Then every episode\'s match is just putting the leader down.'},
  wp1:{t:'Waypoint 1',s:'WP1',single:1,
   d:'End of the pick. The model learns to bring the brick here; everything after it is replayed.',
   how:'Hover above the orange plate, high enough to clear every brick on it.'},
@@ -60,6 +61,7 @@ function card(n,dis){const m=SLOTS[n],w=wpsOf(n),on=w.length>0;let body='';
   <div class=wps-h><span class="rt-dot ${on?'on':''}"></span><h3>${m.t}</h3><code>${n}</code>${m.x?'<span class="badge warn">Experimental</span>':''}<span class=r>${badge(n,w)}</span></div>
   <p class=wps-d>${m.d}</p>
   <p class=wps-how><span>Where</span>${m.how}</p>
+  ${m.tip?`<p class=wps-how><span>Best</span>${m.tip}</p>`:''}
   ${body}${test}</article>`}
 
 /* ---------- route diagram ---------- */

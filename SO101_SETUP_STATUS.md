@@ -509,6 +509,20 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Real-hardware path changes to review once on the station** (untestable here): `capture.py` imports `pyrealsense2` only when not in mock mode, reads the port from `JUNCTION_PORT` (default 7870) and calls `mock_hw` only in mock mode; `arm.py` imports lerobot only when not in mock mode; `collect.py`'s export passes `--episodes` explicitly (same folder as before).
     - `sim_test.py` used to overwrite `anomaly_capture/sort_settings.json` on every run; fixed.
 
+27. **Recording runs always finish: failures pause, STOP is resumable, and a guided rest-position cycle** (2026-11-14 ≈13:00, the user's request: "it must get all of the runs done").
+    - **Failures pause, they don't end the run.** A BLOCKED move, a motion error, a missed brick, a discard (X) or a timeout now all go to the same pause (`reset`, `info.why` = blocked / missed / discard / timeout / error).
+      - The follower copies the leader (creeping slowly at first), the human fixes the scene, and **N** continues with the next episode.
+      - Only STOP, or losing the arm or leader, ends the run.
+      - Before, any exception ended the run, and "missed" went straight on without waiting.
+    - **Resumable sessions.** Each session writes `episodes/<session>/session.json` (brick, label, target).
+      - `/collect/status.resume` is the most recent session that ended below its target. It is worked out from disk, so it survives restarts.
+      - `POST /collect/start?resume=<session>&n=` continues the same folder and count.
+      - A success counts the moment it is saved (end of the carry), so a STOP or BLOCKED during the put-back can't lose it.
+    - **Match guide.** `info.signed` gives the signed degrees leader − follower per joint. The record page draws one bar per joint with the ±8° zone, so you can see which way to move each leader joint.
+    - **The cycle, made explicit:** robot to the start pose → leader to the same pose → pick → let go, and put the leader back in its rest position while the robot carries and puts the brick back.
+      - **Tip:** teach `home` with the leader resting in its natural rest position. Each match is then just "set the leader down". This tip is on the Record and Waypoints pages.
+    - **Tested** on the mock station: BLOCKED in the carry pauses → N continues; STOP → resume → 3/3 done; STOP during the put-back keeps the count. New flow test `test_blocked_carry_pauses_run_then_stop_and_resume` in `tests/test_mock_flows_collect.py`. Not yet run on the real arm.
+
 ---
 
 ## 5. Issues and fixes log
@@ -533,7 +547,13 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 
 ## 6. Open blockers
 
-### Modal: dropped
+### Modal: dropped, then working again (2026-11-14 ≈12:58)
+- **Update ≈12:58:** the manual deploy (command below, with the saved target's app/volume names `physicalai-9449e57a…`) now **succeeds**.
+  - Studio kept showing "degraded", because it holds a failed deploy in memory until the backend restarts.
+  - After a backend restart (kill by PID, then the usual `serve` command) the target reports **healthy**.
+  - First run: job `75217bde…`, ACT on `pick-sim604-real1x10`, **A100-80GB** (the user's choice), 15 epochs, batch 32, augmentation on, val split 5%. Submitted 12:59 via `POST /api/jobs:train` with `training_target: remote` and `modal_gpu: A100-80GB`.
+  - **Not yet confirmed: whether Modal accepts the GPU run without a card.**
+- Original note:
 - The $100 credit was redeemed, but Modal requires a payment method before allowing GPU functions, and it declined every card we tried.
 - **We decided to stop pursuing Modal and train locally** (decision 5).
 - An unused Studio training target named "Modal" (status: degraded) is still saved. It's harmless; delete it in Settings → Training Targets if it's in the way.

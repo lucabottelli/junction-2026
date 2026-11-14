@@ -425,14 +425,14 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - The shape is roughly convex (deep hollows can hide a cross).
       - The object can be gripped again after a 90° turn. A triangular prism gripped on two slanted faces may squeeze out; the cycle then stops with "re-grip failed".
 
-20. **A simulated twin of the station generates pick demos for ACT; training mixes sim and real** (2026-11-14 ≈04:00, the user's decision). Code: `~/junction26/sim/`. Plan: `~/.claude/plans/dreamy-beaming-bear.md`.
+21. **A simulated twin of the station generates pick demos for ACT; training mixes sim and real** (2026-11-14 ≈04:00, the user's decision). Code: `~/junction26/sim/`. Plan: `~/.claude/plans/dreamy-beaming-bear.md`.
     - **Why:**
       - Real demos cost a human teleoperating each pick; sim gives thousands of auto-labelled picks.
       - The user chose **sim + real mix**, because a policy trained only on rendered images usually fails on real cameras (and our top camera is noisy at max gain).
       - The sim task is **phase 1 only:** pick a brick lying anywhere on the orange plate → WP1, the same episode as the real data.
     - **Stack:** `physicalai-mujoco-plugin` 0.5.0 (added to Studio's backend with `uv add`; mujoco 3.17, nothing downgraded). It provides the SO-101 twin (same joint names) and the composer. Our own scene sits on top of it, plus the plugin's `ArmIK` (damped least-squares, fingers down, jaw yaw).
     - **Files:**
-      - `station.py`: scene (table, 3 plates as dishes with rims, Duplo red 2×4 / green 2×2 / blue 2×2 *(assumed; check)*, top camera, wrist camera) and the units mapping.
+      - `station.py`: scene (table, 3 plates as dishes with rims, the real bricks (user-confirmed 04:55): **red 2×4 ridge roof** (tent-shaped prism, no studs), **green 2×3**, **blue 2×2**, top camera, wrist camera) and the units mapping.
       - `calib.py` + `overlay.py`: fit to the real station; they write `calibration.json` and `calib/overlay_*.jpg`.
       - `expert.py`: scripted pick → WP1.
       - `generate.py`: randomized episodes in the **same raw format** as `episodes/`, written to `episodes_sim/`.
@@ -446,21 +446,24 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - **Precise calibration still needs a session with the real arm:** keypoints spread over the whole table.
     - **Wrist camera:** placed behind the jaws (gripper frame (0.022, −0.05, −0.05), tilted 26° toward the fingers, fovy 72°), so both jaws show at the bottom, as on the real camera.
     - **Expert:**
-      - Grasp across the brick's narrowest horizontal side. Choose the jaw flip that is reachable and upright with the smallest wrist turn.
+      - Grasp across the narrowest horizontal width, for any shape and pose: the brick's corner points are projected on closing directions every 3°. Grasp height is 45% up the brick. Choose the jaw flip that is reachable and upright with the smallest wrist turn.
       - Motion: min-jerk joint move home → above the brick, correct a deliberate approach error, descend, squeeze past the brick, lift, carry to WP1.
       - Randomized speed, hover height and pauses.
-      - **97% success** (29/30) without rendering.
+      - Success without rendering: **97%** (29/30) with the first, wrong shapes. With the real shapes it is **83%** (50/60): red ridge 75%, green 93%, blue 89%. Most failures are crowding, where the target gets pushed by a neighbour or by the jaw. Failed episodes are discarded, never saved.
     - **Domain randomization:**
-      - 1–3 bricks; pose anywhere on the plate; 45% studs up, otherwise any face up.
+      - 1 brick (50%), 2 (35%) or 3 (15%); pose anywhere within 70% of the plate radius; 45% studs up, otherwise any face up.
       - Colour shades, light position and intensity.
       - Arm recoloured to the real white, jaws dark red.
       - Top camera ±7 mm / ±1°; wrist camera ±3 mm / ±3° / ±3° FOV.
-      - **Real backgrounds composited in** via segmentation: sim table pixels in the top view are replaced by real top frames (sim shadows kept), and empty-sky pixels in the wrist view by real wrist frames.
+      - **Real backgrounds composited in** via segmentation: sim table pixels in the top view are replaced by real top frames (sim shadows kept; the real orange plate and its bricks are painted out first), and empty-sky pixels in the wrist view by real wrist frames. Live `/snap` previews are not used, because they carry UI overlays.
       - Per-camera look: top noisy at max gain and bluish; wrist dark, warm and vignetted.
     - **Export:** `export_act.py --sim-episodes ~/junction26/episodes_sim [--sim-max N] [--real-repeat K]`. Sim episodes skip the human-demo cleaning; `--real-repeat` up-weights the few real demos.
-    - **Speed:** about 18 episodes/min with 12 workers (CPU-bound), about 28 MB per episode.
+    - **Speed:** about 20 episodes/min with 12 workers (CPU-bound), about 30 MB per episode.
+    - **Runs:**
+      - `gen1` (600, wrong brick shapes) was stopped at 480 and moved to `episodes_sim_old/`; don't train on it.
+      - `gen2` (700 attempts, real shapes) started at 04:58.
 
-21. **The control site was redesigned: dark, minimal, one page per step, served at `/`** (2026-11-14 ≈04:30, the user's request; this replaces Decision 17's "one long page on /arm").
+22. **The control site was redesigned: dark, minimal, one page per step, served at `/`** (2026-11-14 ≈04:30, the user's request; this replaces Decision 17's "one long page on /arm").
     - **Look:**
       - A single near-black theme: background `#0A0A0A`, ink `#EDEBE6`, one champagne accent `#CBB68C` and a refined red for STOP/REC. There is no light theme.
       - Instrument Serif for titles and big numbers, Inter for body text. Both are self-hosted in `anomaly_capture/web/static/fonts/`, so no internet is needed.

@@ -11,3 +11,13 @@ __pycache__/
 anomaly_capture/capture.log
 .venv/
 *.part
+
+# simulated episodes (sim/generate.py): GBs, regenerate instead of committing
+episodes_sim/
+sim/*.log
+sim/scene/probe.xml
+episodes_sim_old/
+sim/eval/
+sim/MUJOCO_LOG.TXT
+sim/calib/live_*.jpg
+sim/calib/now_*.jpg

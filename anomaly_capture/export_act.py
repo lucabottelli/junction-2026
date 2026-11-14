@@ -130,6 +130,9 @@ def main():
     ap.add_argument("--name", default=""); ap.add_argument("--task", default="", help="override the per-episode task (default: 'pick up the <brick> brick')")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--episodes", default=str(ROOT / "episodes"), help="raw episodes folder")
+    ap.add_argument("--sim-episodes", default="", help="also export simulated episodes from this folder (sim/generate.py)")
+    ap.add_argument("--sim-max", type=int, default=0, help="at most this many sim episodes (0 = all)")
+    ap.add_argument("--real-repeat", type=int, default=1, help="write each real episode this many times (weights real vs sim)")
     args = ap.parse_args()
     EP = Path(args.episodes)
 
@@ -143,8 +146,21 @@ def main():
         plans.append((name, m, d, data, idx, act_s)); tot_o += rep["orig_s"]; tot_n += rep["new_s"]
         print(f"  ✓ {name}: {rep['orig_s']} s -> {rep['new_s']} s  (idle trimmed {rep['trim_s']} s, pauses {rep['pause_s']} s,"
               f" grasp + robot carry to WP1 {rep['precision_s']} s kept, {rep['frames']} frames)")
+    if plans: print(f"total {tot_o:.1f} s of demonstrations -> {tot_n:.1f} s ({100 * (1 - tot_n / tot_o):.0f}% shorter)")
+    plans = plans * max(1, args.real_repeat)
+    if args.sim_episodes:  # scripted sim demos: already clean and at full speed, so no trimming / retiming
+        sim = sorted(Path(args.sim_episodes).expanduser().glob("*/*/meta.json"))
+        n_sim = 0
+        for md in sim:
+            m = json.loads(md.read_text()); d = md.parent
+            if m.get("source") != "sim" or m.get("outcome") != "success": continue
+            if args.bricks and m.get("brick") not in args.bricks: continue
+            if args.sim_max and n_sim >= args.sim_max: break
+            data = dict(np.load(d / "data.npz")); n = len(data["t"])
+            plans.append((f"sim/{d.parent.name}/{d.name}", m, d, data, list(range(n)), data["action"].astype(np.float64)))
+            n_sim += 1
+        print(f"+ {n_sim} simulated episode(s) from {args.sim_episodes} (real episodes x{max(1, args.real_repeat)})")
     if not plans: print("nothing to export"); return 1
-    print(f"total {tot_o:.1f} s of demonstrations -> {tot_n:.1f} s ({100 * (1 - tot_n / tot_o):.0f}% shorter)")
     if args.dry_run: print("dry run: nothing written"); return 0
 
     sys.path.insert(0, str(STUDIO_SRC))
@@ -178,7 +194,8 @@ def main():
                     img = cv2.imread(str(d / c / f"{i:06d}.jpg"))
                     obs[c] = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 mut.add_frame(obs, {f"{n}.pos": float(ac[r, j]) for j, n in enumerate(JOINTS)}, task_of(m))
-            mut.save_episode(); print(f"  wrote {name_} ({len(idx)} frames)")
+            mut.save_episode()
+            if not name_.startswith("sim/"): print(f"  wrote {name_} ({len(idx)} frames)")
     finally:
         mut.teardown()
     print(f"✓ done: dataset '{name}' is in Studio (Datasets). Train ACT on it there; cameras: {POLICY_CAMS}")

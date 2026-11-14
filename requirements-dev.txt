@@ -1,0 +1,14 @@
+# Dev / test environment (no hardware): make venv  ->  .venv/
+# Station-only packages (pyrealsense2, lerobot, Studio) are NOT needed: the mock station replaces them (docs/DEV.md).
+numpy
+opencv-python-headless
+fastapi
+uvicorn
+httpx
+pytest
+scipy
+mujoco
+openvino
+onnx
+onnxruntime
+pillow

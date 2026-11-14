@@ -21,8 +21,8 @@ What it measures (decision 9: "every change must earn its place on a held-out te
   * with size labels (synth_truth.jsonl from synth_data.py, or a hand-made defect_sizes.jsonl with {"episode"|"file",
     "cross_mm"} lines from measured crosses): detection rate vs cross size and the smallest size detected reliably
   * heat-map panels of the worst misses and false alarms
-Output: <model-dir>/eval/{eval.json, report.md, hist.png, size_curve.png, worst.png}; --compare also writes
-runs/eval/compare_<cam>_<brick>_<time>.{json,md}. A model card's "eval" entry is updated. SYNTHETIC data (a
+Output: <model-dir>/eval/{eval.json, report.md, hist.png, size_curve.png, worst.png}; --compare writes each variant's
+details to <model-dir>/eval_compare/ (common test set) and the table to runs/eval/compare_<cam>_<brick>_<time>.{json,md}. A model card's "eval" entry is updated. SYNTHETIC data (a
 synth_info.json in the data dir) is labelled as such in every output.
 """
 import argparse, ast, json, os, sys, time
@@ -325,7 +325,7 @@ def panel(path, items, title, synthetic, side=200):
 
 # ---------------------------------------------------------------- one model
 def evaluate(mdir, data=None, device="CPU", lat_devices=("CPU",), fast=None, fast_device=None, truth_path=None,
-             write_thresholds=False, files_override=None, runner=None, n_worst=6, use_cache=True, seed=0):
+             write_thresholds=False, files_override=None, runner=None, n_worst=6, use_cache=True, seed=0, eval_name="eval"):
     mdir = Path(mdir).resolve()
     card = {}
     try: card = json.loads((mdir / "model_card.json").read_text())
@@ -335,7 +335,7 @@ def evaluate(mdir, data=None, device="CPU", lat_devices=("CPU",), fast=None, fas
     brick = card.get("brick", mdir.name.split("_")[0])
     brick = "" if brick == "all" else brick
     synthetic = (data / "synth_info.json").exists()
-    ev = mdir / "eval"; ev.mkdir(exist_ok=True)
+    ev = mdir / eval_name; ev.mkdir(exist_ok=True)
     good, defect, train, note = test_set(mdir, data, cam, brick)
     if files_override: good, defect = files_override
     leak = sorted({f.name for f in good + defect} & train)
@@ -462,7 +462,7 @@ def evaluate(mdir, data=None, device="CPU", lat_devices=("CPU",), fast=None, fas
         if own: runner.close()
     (ev / "eval.json").write_text(json.dumps(res, indent=1, default=float))
     (ev / "report.md").write_text(report_md(res))
-    if card:
+    if card and eval_name == "eval":
         card["eval"] = {"date": res["created"], "dir": str(ev), "synthetic_data": synthetic, "photo_auroc": res["photo"]["auroc_all_defect_photos"],
                         "object_auroc": res["object"]["auroc"], "object_recall_at_zero_fa": res["object"]["recall_at_zero_fa"],
                         "thresholds": {k: res["thresholds"].get(k) for k in ("t_low", "t_high")} if "t_low" in res["thresholds"] else None}
@@ -563,7 +563,8 @@ def compare(dirs, data=None, device="CPU", lat_devices=("CPU",), truth=None, out
     rows = []
     try:
         for d in dirs:
-            r = evaluate(d, data, device, lat_devices, truth_path=truth, files_override=(good, defect), runner=runner)
+            r = evaluate(d, data, device, lat_devices, truth_path=truth, files_override=(good, defect), runner=runner,
+                         eval_name="eval_compare")
             lat = next((x for x in r["latency"] if "infer_ms" in x), None)
             cc = r["object"].get("cross_calibrated") or {}
             rows.append({"variant": d.name, "dir": str(d), "model": r["card"].get("model"), "image_size": r["card"].get("image_size"),

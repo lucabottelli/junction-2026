@@ -54,7 +54,7 @@ def render():
 
 
 MOCK_BADGE = ('<div id=mockbadge title="capture.py runs with simulated cameras and arms (mock_hw.py, docs/DEV.md); '
-              'nothing here moves real hardware" style="position:fixed;left:12px;bottom:12px;z-index:50;padding:4px 10px;'
+              'nothing here moves real hardware" style="position:fixed;left:50%;transform:translateX(-50%);bottom:10px;z-index:50;padding:4px 10px;'
               'border:1px solid var(--warn);border-radius:var(--r-xs);background:var(--surface);color:var(--warn);'
               'font:600 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;pointer-events:auto">Mock station</div>')
 

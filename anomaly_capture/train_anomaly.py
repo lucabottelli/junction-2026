@@ -186,6 +186,7 @@ def main(argv=None):
     ap.add_argument("--models", default=str(ROOT / "models"))
     ap.add_argument("--clean-work", action="store_true", help="delete Anomalib's work dir (checkpoints) after the export")
     ap.add_argument("--dry-run", action="store_true", help="print the split and exit (no Anomalib needed)")
+    ap.add_argument("--export-from", default="", help="skip training: re-export this Lightning checkpoint (work/.../model.ckpt)")
     a = ap.parse_args(argv)
     if a.xpu: a.device = "xpu"
     a.layers = [s for s in a.layers.split(",") if s]
@@ -246,7 +247,10 @@ def main(argv=None):
         kw["accelerator"] = "cpu"
     engine = Engine(**kw)
     t0 = time.time()
-    engine.fit(model=model, datamodule=dm)
+    if a.export_from:
+        model = type(model).load_from_checkpoint(a.export_from, map_location="cpu", weights_only=False)
+    else:
+        engine.fit(model=model, datamodule=dm)
     t_train = time.time() - t0
     test_metrics = {}
     if bad and holdout:
@@ -258,9 +262,19 @@ def main(argv=None):
     if (out / "weights").exists(): shutil.rmtree(out / "weights")
     comp = {"fp16": CompressionType.FP16, "none": None, "int8": CompressionType.INT8,
             "int8_ptq": CompressionType.INT8_PTQ}[a.compress]
+    # batch fixed to 1, height/width dynamic: Anomalib's default export traces with a batch of 2 and PatchCore then
+    # bakes batch=2 into the graph ([2,3,?,?]), which the worker's single image can't feed (found on the synthetic run)
+    dyn = ({0: torch.export.Dim.STATIC, 2: torch.export.Dim("height"), 3: torch.export.Dim("width")},)
     engine.export(model=model, export_type=ExportType.OPENVINO, export_root=out, compression_type=comp,
-                  datamodule=dm if a.compress == "int8_ptq" else None)
+                  datamodule=dm if a.compress == "int8_ptq" else None, onnx_kwargs={"dynamic_shapes": dyn})
     xml = sorted(out.rglob("model.xml"))
+    try:
+        import openvino as ov
+        shp = ov.Core().read_model(str(xml[0])).inputs[0].get_partial_shape()
+        if shp[0].is_static and shp[0].get_length() != 1: raise SystemExit(f"exported input shape {shp}: batch must be 1 or dynamic")
+        print("OpenVINO input shape:", shp)
+    except SystemExit: raise
+    except Exception as e: print("could not check the exported input shape:", e)
     (out / "holdout.json").write_text(json.dumps([f.name for f in holdout]))
     (out / "split.json").write_text(json.dumps(split, indent=1))
     card = {"created": datetime.now().isoformat(timespec="seconds"), "brick": name, "cam": a.cam, "model": a.model,

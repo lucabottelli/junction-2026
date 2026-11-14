@@ -1,0 +1,36 @@
+# CI: hardware-free tests on the mock station (docs/DEV.md). The station itself is never needed.
+name: ci
+on: [push, pull_request]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: requirements-dev.txt}
+      - run: pip install -r requirements-dev.txt
+      - name: sim_test.py (inspection logic)
+        run: cd "$RUNNER_TEMP" && cp -r "$GITHUB_WORKSPACE/anomaly_capture" . && python anomaly_capture/sim_test.py
+      - name: fast tests
+        run: python -m pytest tests -q -m "not slow and not ui"
+      - name: end-to-end flows on the mock station
+        run: python -m pytest tests -q -m slow
+
+  ui-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true          # Playwright/Chromium setup on the runner is the uncertain part
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: requirements-dev.txt}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - run: pip install -r requirements-dev.txt
+      - run: npm install -g playwright && npx playwright install --with-deps chromium
+      - run: NODE_PATH=$(npm root -g) python -m pytest tests -q -m ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: ui-screenshots, path: tests/screenshots/}

@@ -43,6 +43,11 @@ an anomaly -> straight to the reject plate from where the arm stands; a doubt, a
 block seen -> back to that pose for the careful look (retakes, re-posing), then on. Every result is in before
 the block is set down for a re-clamp or let go at a plate.
 
+The photo stop (cfg photo_frames 8, photo_still_s 0.25, photo_wait_s 0.2; POST /flow/cfg?photo_frames=16&
+photo_still_s=0 restores the collection's values): the arm is still for 0.25 s, waits 0.2 s for the swing and
+averages 8 frames instead of 16. The poses of a showing are visited in the order with the least travel, at full
+speed, and the arm leaves straight up from the last one.
+
 Motion. The arm stands still only where something happens: for a photo, on the tape spot, at the plate, and at
 the pick. Everything in between is one blended move through its clearance poses (Collector.path / arm.Arm.path):
 WP1 -> above WP2 -> photo pose;  photo pose -> above WP2 -> above the tape spot;  photo pose -> above WP2 ->
@@ -99,7 +104,9 @@ class Flow:
         self.S, self.A, self.ctx, self.C, self.T, self.F, self.AC, self.DATA = S, A, ctx, C, T, F, AC, DATA
         self.cfg_path = HERE / "flow_settings.json"
         self.cfg = {"accept": "plate_a", "reject": "plate_b", "max_reclamps": 4, "retakes": 1,
-                    "uncertain_to": "reject", "side_view": "", "async_judge": True}
+                    "uncertain_to": "reject", "side_view": "", "async_judge": True,
+                    # the stop at a photo pose: frames averaged (the collection uses 16), still time, wait for the swing
+                    "photo_frames": 8, "photo_still_s": 0.25, "photo_wait_s": 0.2}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
         if self.cfg["accept"] not in PLATE_SLOTS:                  # settings from before the plates had their own slots
@@ -152,33 +159,52 @@ class Flow:
     def grab(self):
         """The still frames of one photo; the arm must stand still for this (about 0.5 s): the averaged colour frame,
         the depth of that moment and the joints. Everything after it (mask, crop, files, score) needs no arm."""
-        S = self.S; shots = S.averaged(["front"]); cam = S.cams["front"]
+        S = self.S; n = int(self.cfg.get("photo_frames") or 0) or None; cam = S.cams["front"]
+        try: shots = S.averaged(["front"], n)
+        except TypeError: shots = S.averaged(["front"])
         dep = getattr(cam, "depth", None)
         if dep is not None and time.time() - getattr(cam, "depth_t", 0) >= 1.0: dep = None
-        return {"shots": shots, "depth": {"front": None if dep is None else dep.copy()},
-                "joints": {n: int(x) for n, x in self.A.pos.items()}}
+        return {"shots": shots, "depth": {"front": None if dep is None else dep.copy()}, "frames": n,
+                "joints": {j: int(x) for j, x in self.A.pos.items()}}
+
+    def settle(self):
+        """Stand still before a photo, as short as it can be (the user, 2026-11-15): no body joint moved more than
+        2 ticks for cfg photo_still_s, then cfg photo_wait_s more for the block to stop swinging. feed.settle (the
+        collection's 0.5 s + 0.4 s) is the fallback when photo_still_s is 0."""
+        still, wait = float(self.cfg.get("photo_still_s") or 0), float(self.cfg.get("photo_wait_s") or 0)
+        if still <= 0: return self.F.settle()
+        A = self.A; t0 = time.time(); last = dict(A.pos); since = t0
+        while time.time() - t0 < 3.0:
+            time.sleep(0.03); self.T.check(); now = dict(A.pos)
+            if max(abs(now[j] - last[j]) for j in BODY) > 2: since = time.time(); last = now
+            elif time.time() - since >= still: break
+        time.sleep(wait)
 
     def snap(self, brick, view, idx, model, t_low, t_high):
         """Photo for the background judge: settle, grab the frames -> a function that turns them into the judged
         photo record (run by the worker thread while the arm moves on)."""
         T, F = self.T, self.F
-        F.settle(); T.check(); prep.configure_inhand(brick=brick)
+        ts = time.perf_counter(); self.settle(); T.check(); prep.configure_inhand(brick=brick)
         t0 = time.perf_counter(); g = self.grab(); g_ms = round((time.perf_counter() - t0) * 1000, 1)
+        s_ms = round((t0 - ts) * 1000, 1)
         def finish():
             t1 = time.perf_counter(); recs = []
             nf = self.ctx.capture(["front"], "test", brick, view, idx, self.session, shots=g["shots"], depth=g["depth"],
                                   joints=g["joints"], out=recs) if "front" in g["shots"] else 0
-            p = self._photo(brick, view, nf, recs[0] if recs else {}, t1); p["grab_ms"] = g_ms
+            p = self._photo(brick, view, nf, recs[0] if recs else {}, t1)
+            p.update({"grab_ms": g_ms, "settle_ms": s_ms, "frames": g.get("frames")})
             return self.judge(p, brick, model, t_low, t_high)
         return finish
 
     def shot(self, brick, view, idx):
-        T, F = self.T, self.F
-        F.settle(); T.check(); prep.configure_inhand(brick=brick)
-        t0 = time.perf_counter()
-        nf = self.ctx.capture(["front"], "test", brick, view, idx, self.session)
-        rec = next((m for m in reversed(F._last_meta(3)) if m.get("cam") == "front"), {}) if nf else {}
-        return self._photo(brick, view, nf, rec, t0)
+        """One photo, waited for (the careful look and the waiting flow): same stop and same frames as snap()."""
+        T = self.T
+        ts = time.perf_counter(); self.settle(); T.check(); prep.configure_inhand(brick=brick)
+        t0 = time.perf_counter(); g = self.grab(); recs = []
+        nf = self.ctx.capture(["front"], "test", brick, view, idx, self.session, shots=g["shots"], depth=g["depth"],
+                              joints=g["joints"], out=recs) if "front" in g["shots"] else 0
+        p = self._photo(brick, view, nf, recs[0] if recs else {}, t0)
+        p.update({"settle_ms": round((t0 - ts) * 1000, 1), "frames": g.get("frames")}); return p
 
     def _photo(self, brick, view, nf, rec, t0):
         """Photo record from what ctx.capture wrote (meta record `rec`): is a block there, is it cut by the frame."""
@@ -248,11 +274,10 @@ class Flow:
         there is no stop above WP2 and no detour over WP1 (the user, 2026-11-15). The arm stands still only for the
         photos. -> the step that stopped it (or None = all clean)."""
         C = self.C; above = C.above_wp2(wp1, wp2[0]["pos"])[0]; at = None; bad = None
-        for w in wp2:
-            if w["name"] not in views: continue
+        for w in self.order([x for x in wp2 if x["name"] in views]):
             if at is None: C.path([above, w["pos"]], gripper=g_lock)
-            else: C.goto(w["pos"], C.cfg["speed"] * 0.6, gripper=g_lock)
-            at = w; self.exit_via = ([] if w is wp2[0] else [wp2[0]["pos"]]) + [above]
+            else: C.goto(w["pos"], gripper=g_lock)
+            at = w; self.exit_via = [C.above_wp2(wp1, w["pos"])[0]]            # the way out: straight up from this pose
             def nudge(mm, w=w):
                 try: pose = next(x for x in self.poses(self.brick_now, {w["name"]: mm}) if x["name"] == w["name"])["pos"]
                 except Exception: return False
@@ -290,13 +315,12 @@ class Flow:
             except Exception: return w["pos"]
         self.alarm.clear(); A.intr = self.alarm
         try:
-            for w in wp2:
-                if w["name"] not in views: continue
+            for w in self.order([x for x in wp2 if x["name"] in views]):
                 if self.alarm.is_set(): raise Interrupted()
                 lift = float(self.lift_mem.get((brick, w["name"], grip > 1), 0.0)); pose = pose_of(w, lift)
                 if at is None: C.path([above, pose], gripper=g_lock)
-                else: C.goto(pose, C.cfg["speed"] * 0.6, gripper=g_lock)
-                at = w; self.exit_via = ([] if w is wp2[0] else [wp2[0]["pos"]]) + [above]
+                else: C.goto(pose, gripper=g_lock)
+                at = w; self.exit_via = [C.above_wp2(wp1, pose)[0]]            # the way out: straight up from this pose
                 self.T.check(); self.gate(); self.T.state = "inspect"
                 self.T.say(f"block {idx}: grip {grip}, {w['name']}, photo (judged while the arm moves on)")
                 jobs.append((w, lift, self.pool.submit(self._judge_job, self.snap(brick, w["name"], idx, model, t_low, t_high))))
@@ -316,9 +340,9 @@ class Flow:
                 continue
             # doubt: back to that pose, the careful look there
             self.alarm.clear()
-            via = self.exit_via if self.exit_via and self.exit_via[-1] is above else self.exit_via + [above]
-            C.path(via + [pose_of(w, lift)], gripper=g_lock)
-            self.exit_via = ([] if w is wp2[0] else [wp2[0]["pos"]]) + [above]
+            back = pose_of(w, lift)
+            C.path(self.exit_via + [C.above_wp2(wp1, back)[0], back], gripper=g_lock)
+            self.exit_via = [C.above_wp2(wp1, back)[0]]
             def nudge(mm, w=w):
                 try: pose = next(x for x in self.poses(brick, {w["name"]: mm}) if x["name"] == w["name"])["pos"]
                 except Exception: return False
@@ -338,6 +362,17 @@ class Flow:
         above = ab[0]["pos"] if ab else {**p, "shoulder_lift": wp1["shoulder_lift"], "elbow_flex": wp1["elbow_flex"],
                                           "wrist_flex": wp1["wrist_flex"]}
         return above, p, L
+
+    @staticmethod
+    def order(poses):
+        """The photo poses in the order with the least travel: the first one stays first (the arm comes in over it),
+        then always the nearest one not yet visited (largest joint difference = what sets a move's time)."""
+        if len(poses) < 3: return list(poses)
+        dist = lambda a, b: max(abs(float(a["pos"].get(j, 0)) - float(b["pos"].get(j, 0))) for j in BODY)
+        out, rest = [poses[0]], list(poses[1:])
+        while rest:
+            nxt = min(rest, key=lambda w: dist(out[-1], w)); rest.remove(nxt); out.append(nxt)   # min keeps the taught order on a tie
+        return out
 
     def reclamp(self, g_lock, k, sign):
         """Re-clamp from where the arm stands (above WP2) and end above WP2 again, ready for the next showing."""
@@ -588,7 +623,7 @@ def make_router(S, A, ctx, C, T, F, AC, DATA):
 
     @r.post("/flow/cfg")
     def cfg(accept: str = "", uncertain_to: str = "", max_reclamps: int = -1, retakes: int = -1, side_view: str = None,
-            async_judge: int = -1):
+            async_judge: int = -1, photo_frames: int = -1, photo_still_s: float = -1, photo_wait_s: float = -1):
         """accept = the plate that takes the clean blocks (plate_a | plate_b); the other one takes the rejected ones."""
         if FL.running: return {**FL.status(), "msg": "not while the flow runs", "ok": False}
         if accept in PLATE_SLOTS:
@@ -598,6 +633,9 @@ def make_router(S, A, ctx, C, T, F, AC, DATA):
         if 0 <= retakes <= 3: FL.cfg["retakes"] = retakes
         if side_view is not None: FL.cfg["side_view"] = side_view.strip()
         if async_judge in (0, 1): FL.cfg["async_judge"] = bool(async_judge)      # 0 = wait for every verdict at the photo pose
+        if 2 <= photo_frames <= 16: FL.cfg["photo_frames"] = photo_frames        # 16 = what the training photos used
+        if 0 <= photo_still_s <= 1: FL.cfg["photo_still_s"] = photo_still_s      # 0 = feed.settle (0.5 s + 0.4 s)
+        if 0 <= photo_wait_s <= 1: FL.cfg["photo_wait_s"] = photo_wait_s
         FL.save_cfg(); return FL.status()
 
     @r.post("/flow/pause")

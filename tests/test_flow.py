@@ -306,7 +306,7 @@ def test_between_the_steps_the_arm_moves_through_the_clearance_poses_in_one_move
     FL.cycle(1, "")
     paths = [x[1] for x in log if x[0] == "path"]
     assert paths[0] == ["wp2_above", "wp2-1"]                                    # WP1 -> above WP2 -> first photo pose
-    assert paths[1] == ["wp2-1", "wp2_above", "tape_above"]                      # last photo pose -> out of WP2 -> tape spot
+    assert paths[1] == ["wp2_above", "tape_above"]                               # last photo pose -> straight up -> tape spot
     assert paths[2] == ["wp2_above", "wp2-1"] and paths[3] == ["wp2_above", "tape_above"]
     assert paths[-2] == ["wp2_above", 1, 1] and paths[-1] == [1, "home"]         # -> above plate A -> plate A; then up and home
     assert not [x for x in log if x[0] in ("to_wp2", "up_wp2")]                  # no separate stop above WP2 any more
@@ -366,7 +366,7 @@ def test_background_judge_clean_block_never_waits_and_is_accepted(tmp_path):
     assert photos(log) == ["wp2-1", "wp2-2", "wp2-3", "wp2-1", "wp2-1", "wp2-1"]
     assert all(st.get("background") for st in rec["steps"]) and len(rec["steps"]) == 6
     paths = [x[1] for x in log if x[0] == "path"]
-    assert ["wp2-1", "wp2_above", "tape_above"] in paths              # after the photos: straight on toward the tape spot
+    assert ["wp2_above", "tape_above"] in paths                       # after the photos: straight on toward the tape spot
     assert ["wp2_above", 1] in paths                                   # after the last showing: straight on toward the accept plate
 
 
@@ -422,3 +422,11 @@ def test_nothing_is_set_down_or_let_go_before_every_verdict_is_in(tmp_path):
     T.regrip_vision = regrip
     rec = FL.cycle(1, "")
     assert rec["verdict"] == "accept" and seen["held_back"] is False    # ... so the re-clamp waited for it
+
+
+def test_photo_poses_are_visited_in_the_order_with_the_least_travel():
+    P = lambda name, pan: {"name": name, "pos": {"shoulder_pan": pan, "shoulder_lift": 0, "elbow_flex": 0, "wrist_flex": 0, "wrist_roll": 0}}
+    order = lambda ps: [w["name"] for w in flow.Flow.order(ps)]
+    assert order([P("wp2-1", 0), P("wp2-2", 1363), P("wp2-3", 709)]) == ["wp2-1", "wp2-3", "wp2-2"]      # the station's poses: 1363 instead of 2017 ticks
+    assert order([P("a", 0), P("b", 100), P("c", 200)]) == ["a", "b", "c"] and order([P("a", 0), P("b", 5)]) == ["a", "b"]
+    assert order([{"name": n, "pos": {"id": n}} for n in "abc"]) == ["a", "b", "c"]                       # no joint values: taught order kept

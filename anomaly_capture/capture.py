@@ -418,16 +418,17 @@ class State:
             f = self.frames[k]
             return None if f is None else f.copy()
 
-    def averaged(self, cams):
-        """Average AVG fresh frames on all given cams in the same time window -> {cam: (mean, first, last)}."""
+    def averaged(self, cams, n=None):
+        """Average AVG fresh frames on all given cams in the same time window -> {cam: (mean, first, last)}.
+        n = frames to average instead of AVG[cam] (flow.py: a shorter stop at the photo pose)."""
         with self.lock:
             for k in cams: self.hist[k] = []
         t0 = time.time(); out = {}
         while len(out) < len(cams) and time.time() - t0 < 5:
             with self.lock:
                 for k in cams:
-                    if k not in out and len(self.hist[k]) >= AVG[k]:
-                        st = np.stack(self.hist[k]).astype(np.float32)
+                    if k not in out and len(self.hist[k]) >= (n or AVG[k]):
+                        st = np.stack(self.hist[k][:n or AVG[k]]).astype(np.float32)
                         out[k] = (st.mean(0).round().astype(np.uint8), st[0], st[-1])
             time.sleep(0.02)
         return out

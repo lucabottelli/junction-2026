@@ -984,6 +984,23 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - Accept-plate switch: the accept plate's pill is tinted green, the other one slightly red.
       - Camera views without the detection boxes: new `GET /view/<cam>` (`capture.py`: the frame before the boxes are drawn, 1280 px wide instead of 640). The dev pages keep `/snap/<cam>` with the boxes.
 
+46. **Where a block's time goes; shorter photo stop, photo poses in least-travel order, "Ludicrous" speeds** (2026-11-15 ≈09:35–09:50, the user's choices from the list below; intel-43). **Loaded on the server; not yet run on the arm.**
+    - **First run on the background judge (`runs/flow_20261115_092948`, 3 blocks, start plate emptied):**
+      | Block | Verdict | Re-clamps | Pick | Inspect | Sort | Cycle | Energy |
+      |---|---|---|---|---|---|---|---|
+      | blue | reject: tape, visible patch 6.4 % (limit 5 %) on the side shown after re-clamp 1 | 1 | 12.7 s | 40.6 s | 3.6 s | 56.8 s | 1,158 J |
+      | pink | accept, 4 sides clean | 3 | 14.7 s | 93.0 s | 2.7 s | 110.5 s | 2,292 J |
+      | green | accept, both ends clean (180° turn) | 1 | 15.1 s | 42.8 s | 2.7 s | 60.6 s | 1,247 J |
+      - All 14 photos judged in the background, none failed, none looked at again. Per photo: frames 0.78–1.13 s (arm still), mask + crop + files 0.23–0.38 s and score 28–437 ms in the background.
+      - The blue reject was right: woven tape across the block (`training_images/front/inhand/test/20261115_093041_529_blue_wp2-1_masked.jpg`). **The Anomalib model scored that photo 0.596, below its clean limit of 0.70**: the tape was caught by the visible-patch check (`prep.foreign_share`), not by the model. The blue thresholds were set from clean photos only (decision of 05:40) and need defect photos.
+      - Pink's highest clean score was 0.53 against its limit of 0.59 (after re-clamp 1).
+    - **Timeline of the pink block (from the file times):** pick 14.7 s; WP1 → first photo 5.3 s; two more angles 8.3 s; three re-clamp cycles of 26 s photo to photo (≈10 s to the tape spot, set-down and line-up; 4 s descent; 4 s grip and lift; 8 s back to the photo); plate + home 2.7 s. Pure travel between the taught poses is about 1 s per leg (`arm.profile` on `routines.json`: tape_above → WP1 87° = 1.06 s, plate → home 112–122° = 1.3 s). About 70 % of the block is re-clamping, and most of that is stops, not travel.
+    - **Options put to the user (estimates, none measured):** (1) show the opposite side by a 180° wrist roll so 4 sides need 1 re-clamp instead of 3, ≈44 s, needs photos and a retrain; (2) trim the re-clamp (set-down speed, ≈1 s of fixed waits, merged moves), 12–18 s; (3) shorter photo stop, ≈4 s; (4) photo poses at full speed in a better order, ≈2 s; (5) skip WP1 after the pick, ≈2 s; (6) faster moves, 3–4 s. Not worth it: moving the tape spot (travel is ≈1 s). **The user chose (3) and (4), then asked for the speed options.**
+    - **(3) Photo stop (`flow.settle`, `flow.grab`, cfg `photo_frames` 8, `photo_still_s` 0.25, `photo_wait_s` 0.2):** 8 averaged frames instead of 16 (`State.averaged(cams, n)`), still for 0.25 s instead of 0.5 s, 0.2 s for the swing instead of 0.4 s. The careful look and the waiting flow use the same stop. `POST /flow/cfg?photo_frames=16&photo_still_s=0` restores the collection's values. **Open: the models were trained on 16-frame photos; 8 frames carry ≈1.4× the sensor noise. Check on the first runs that clean blocks keep their scores (pink was already at 0.53 of 0.59).** `frames` and `settle_ms` are in every shot of the log.
+    - **(4) Photo poses (`flow.order`):** the first pose stays first, then always the nearest: wp2-1 → wp2-3 → wp2-2, 1,363 instead of 2,017 ticks of joint travel (wp2-1 → wp2-2 alone is 120°). Moves between poses at full speed instead of 0.6. The arm leaves straight up from the last pose (`above_wp2` of that pose) instead of first going back to wp2-1.
+    - **"Ludicrous" (user page, row under Fast moves):** Off / 1.3× / 1.5× → `POST /sort/cfg?motion_fast=1&motion_speed=1|1.3|1.5`. Uses intel-2f's fast profile; 1.5 is its cap (`arm.FAST_VMAX`, ≈195°/s). Not tried on the arm; a held block may swing or slip at these speeds.
+    - **Tests:** `tests/test_flow.py` 30/30 (new: the pose order).
+
 ---
 
 ## 5. Issues and fixes log

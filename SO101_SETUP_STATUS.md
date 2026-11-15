@@ -779,6 +779,17 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
       - **"Still held at WP1" was wrong for the same reason:** held reads 1868–1899 after the squeeze. Now held = fingers at least `HELD_TICKS = 25` short of the squeeze command, and the squeeze may go past the calibrated end (down to the servo's 1755 limit).
       - `collect.HOLD_MIN_OPEN` 50 → 15 (shared with the teleop/ACT hand-off rules; empty jaws read 6–10 above the end).
     - **Gripper servo overload (02:33):** servo 6 latched an overload error (position 1848, load 200) and the arm would not connect (`Failed to read 'Min_Position_Limit' on id_=6 … Overload error`). Cleared by torque off/on on the gripper only.
+    - **Auto-refit from the robot's own placements broke the calibration (02:46) and is switched off** (`sorter.AUTO_REFIT = False`).
+      - After 10 put-backs `vpick.refit` replaced the demo fit with one on 10 placement pairs: 0.1 mm/px instead of 0.45. Pink then missed 2/2 (planned width 8.8 mm for a 32 mm brick). The user noticed it as "pink needs better calibration".
+      - Cause: the placement pairs scatter 5–27 mm against the demo calibration (mean −7.8 mm in x), so they are not exact pairs; the brick moves when it is let go.
+      - Restored the tDataset2 fit (45 inliers, 6.4 mm median). Bad pairs kept as `vpick_pairs.bad_0250.jsonl`.
+    - **Pick rate with the fixed checks and the demo calibration (3 bricks on the orange plate, speed 0.5, by the gripper rule):**
+      | Target | Held | Run (`runs/acttest_20261115_…`) |
+      |---|---|---|
+      | blue | 9/10 | `024302` (the miss: trial 1, brick lying on its side on the rim from the run before; the refit landed mid-run) |
+      | pink | 5/5 | `025038` |
+      | green (2×3) | 10/10 | `025324` |
+      - Together 24/25. Photos are now kept per trial (time prefix).
     - **Open:** trial 4 of `023946` was a real miss (cause unknown: the photos were overwritten by trial 5). It knocked the brick onto its side on the plate rim, and trial 5 missed that too. The put-backs landed 16–27 mm from their target.
 
 

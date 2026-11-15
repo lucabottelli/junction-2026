@@ -100,7 +100,8 @@ class Sorter:
                     "max_regrasps": cov.DEFAULTS["max_regrasps"],
                     # pick = "act" (policy.py): Studio export dir, OpenVINO device, export backend, limits per pick
                     "act_model": "", "act_device": "GPU", "act_backend": "auto", "act_mode": "chunk",
-                    "act_max_s": 20.0, "act_retries": 2, "act_speed": 1.0}
+                    "act_max_s": 20.0, "act_retries": 2, "act_speed": 1.0,
+                    "vision_smooth": False}      # pick = "vision": one continuous descent instead of corrected steps
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
         self.state, self.msg, self.ok = "idle", "teach the two plates, tick what each WP2 pose shows, then START", True
@@ -241,7 +242,7 @@ class Sorter:
         self.act = vp.VisionPick(self.A, self.C, self.S, kin, cal, retries=o.get("retries", c["act_retries"]), speed=c["act_speed"],
                                  check=self.check, say=self.say, debug_dir=self._vdir,
                                  target=o.get("target", c["brick"] if c.get("vision_colour") else None),
-                                 on_event=o.get("on_event"), tuner=o.get("tuner"))
+                                 on_event=o.get("on_event"), tuner=o.get("tuner"), smooth=bool(c.get("vision_smooth")))
         self.act.tag = tag
         try:
             g_lock, self.act_info = self.act.run()
@@ -896,7 +897,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
             retries: int = -1, allow_incomplete: int = -1, release: int = -1, release_cam: str = "", cascade: int = -1,
             fast_device: str = "", view_deg: float = -1, finger_deg: float = -1, max_regrasps: int = -1,
             act_model: str = None, act_device: str = "", act_backend: str = "", act_mode: str = "", act_max_s: float = -1,
-            act_retries: int = -1, act_speed: float = -1):
+            act_retries: int = -1, act_speed: float = -1, vision_smooth: int = -1):
         if pick in ("handfeed", "teleop", "act", "vision"): T.cfg["pick"] = pick
         if act_model is not None: T.cfg["act_model"] = act_model.strip()
         if act_device in pol.DEVICES: T.cfg["act_device"] = act_device
@@ -905,6 +906,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
         if 2 <= act_max_s <= 120: T.cfg["act_max_s"] = act_max_s
         if 0 <= act_retries <= 5: T.cfg["act_retries"] = act_retries
         if 0.1 <= act_speed <= 1: T.cfg["act_speed"] = act_speed
+        if vision_smooth in (0, 1): T.cfg["vision_smooth"] = bool(vision_smooth)
         if T._pol and T._pol[0] != (T.cfg["act_model"], T.cfg["act_device"], T.cfg["act_backend"]) and not T.active:
             T.drop_policy()
         if judge in ("manual", "model"): T.cfg["judge"] = judge

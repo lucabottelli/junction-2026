@@ -1,0 +1,2050 @@
+{
+ "space": {
+  "dz_mm": [
+   0,
+   -3,
+   -6,
+   3
+  ],
+  "dxy_mm": [
+   0,
+   3,
+   -3,
+   6,
+   -6
+  ],
+  "yaw_off_deg": [
+   0,
+   -8,
+   8
+  ],
+  "open_frac": [
+   1.0,
+   1.5,
+   0.7
+  ],
+  "approach_speed": [
+   1.0,
+   0.7
+  ]
+ },
+ "enabled": false,
+ "counts": {
+  "pink": {
+   "dz_mm": [
+    [
+     17,
+     20
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "dxy_mm": [
+    [
+     17,
+     20
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "yaw_off_deg": [
+    [
+     17,
+     20
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "open_frac": [
+    [
+     17,
+     20
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "approach_speed": [
+    [
+     17,
+     20
+    ],
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "*": {
+   "dz_mm": [
+    [
+     45,
+     32
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "dxy_mm": [
+    [
+     45,
+     32
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "yaw_off_deg": [
+    [
+     45,
+     32
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "open_frac": [
+    [
+     45,
+     32
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "approach_speed": [
+    [
+     45,
+     32
+    ],
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "blue": {
+   "dz_mm": [
+    [
+     15,
+     10
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "dxy_mm": [
+    [
+     15,
+     10
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "yaw_off_deg": [
+    [
+     15,
+     10
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "open_frac": [
+    [
+     15,
+     10
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "approach_speed": [
+    [
+     15,
+     10
+    ],
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "green": {
+   "dz_mm": [
+    [
+     13,
+     2
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "dxy_mm": [
+    [
+     13,
+     2
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "yaw_off_deg": [
+    [
+     13,
+     2
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "open_frac": [
+    [
+     13,
+     2
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "approach_speed": [
+    [
+     13,
+     2
+    ],
+    [
+     0,
+     0
+    ]
+   ]
+  }
+ },
+ "history": [
+  {
+   "t": 1794704815.5,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_030635_vpick/ep0001_030655",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.4,
+    0.9,
+    -3.3
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794704881.6,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_030635_vpick/ep0002_030801",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    -0.4,
+    -4.5
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794704904.0,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_030635_vpick/ep0003_030824",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.2,
+    -0.3,
+    -4.4
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794705007.0,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_030948_vpick/ep0001_031007",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    -1.5,
+    -4.9
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794705032.6,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_030948_vpick/ep0002_031032",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    -0.1,
+    -4.4
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794705118.1,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0001_031158",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.2,
+    -3.7
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794705145.0,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0002_031225",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.4,
+    -0.5,
+    -4.3
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794705207.1,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0003_031327",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.8,
+    -0.5,
+    -5.2
+   ],
+   "g_stall": 1886
+  },
+  {
+   "t": 1794705229.0,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0004_031348",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    -0.2,
+    -4.1
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794705251.0,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0005_031411",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    1.4,
+    1.0,
+    -3.7
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794705314.8,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0006_031514",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.1,
+    -3.9
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794705336.8,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0007_031536",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.2,
+    0.1,
+    -4.1
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794705356.1,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0008_031556",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.6,
+    -0.3,
+    -4.4
+   ],
+   "g_stall": 1907
+  },
+  {
+   "t": 1794705419.9,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0009_031659",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    -0.1,
+    -4.2
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794705446.2,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0010_031726",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.0,
+    -0.4,
+    -3.7
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794705474.6,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_031137_vpick/ep0011_031754",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.7,
+    1.1,
+    -3.9
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794706113.0,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_032815_vpick/ep0001_032833",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    -0.0,
+    -12.1
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794706181.4,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_032815_vpick/ep0002_032941",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    0.8,
+    -10.9
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794706246.7,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_032815_vpick/ep0003_033046",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.6,
+    0.1,
+    -11.8
+   ],
+   "g_stall": 1881
+  },
+  {
+   "t": 1794706271.1,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_032815_vpick/ep0004_033111",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.3,
+    0.0,
+    -11.8
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794706298.5,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_032815_vpick/ep0005_033138",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.4,
+    -11.6
+   ],
+   "g_stall": 1914
+  },
+  {
+   "t": 1794706390.6,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033252_vpick/ep0001_033310",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.2,
+    0.7,
+    -11.8
+   ],
+   "g_stall": 1893
+  },
+  {
+   "t": 1794706412.4,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033252_vpick/ep0002_033332",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.3,
+    -0.0,
+    -11.9
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794706435.2,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033252_vpick/ep0003_033355",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.7,
+    0.9,
+    -11.8
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794706495.8,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0001_033455",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.3,
+    0.0,
+    -12.1
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794706522.6,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0002_033522",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.8,
+    0.4,
+    -12.2
+   ],
+   "g_stall": 1914
+  },
+  {
+   "t": 1794706591.3,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0003_033631",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -1.3,
+    1.7,
+    -11.7
+   ],
+   "g_stall": 1916
+  },
+  {
+   "t": 1794706656.5,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0004_033736",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.1,
+    -0.2,
+    -11.8
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794706722.4,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0005_033842",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.0,
+    -0.4,
+    -11.6
+   ],
+   "g_stall": 1913
+  },
+  {
+   "t": 1794706788.3,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0006_033948",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.2,
+    -11.4
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794706850.2,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0007_034050",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    0.7,
+    -11.9
+   ],
+   "g_stall": 1901
+  },
+  {
+   "t": 1794706910.1,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0008_034150",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.0,
+    -12.5
+   ],
+   "g_stall": 1893
+  },
+  {
+   "t": 1794706934.3,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0009_034214",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.2,
+    0.4,
+    -11.9
+   ],
+   "g_stall": 1914
+  },
+  {
+   "t": 1794707000.3,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0010_034320",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.4,
+    1.3,
+    -11.5
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794707063.9,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0011_034423",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.7,
+    0.8,
+    -11.2
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794707085.6,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0012_034445",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.5,
+    0.2,
+    -11.2
+   ],
+   "g_stall": 1920
+  },
+  {
+   "t": 1794707148.3,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0013_034548",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.2,
+    -0.1,
+    -12.0
+   ],
+   "g_stall": 1893
+  },
+  {
+   "t": 1794707175.1,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0014_034615",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    -0.8,
+    -13.3
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794707246.2,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_033435_vpick/ep0015_034726",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    0.9,
+    -10.9
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794707755.7,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0001_035555",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.7,
+    -11.1
+   ],
+   "g_stall": 1926
+  },
+  {
+   "t": 1794707820.0,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0002_035700",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    0.7,
+    -11.9
+   ],
+   "g_stall": 1913
+  },
+  {
+   "t": 1794707887.0,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0003_035807",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.4,
+    0.4,
+    -11.5
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794707918.8,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0004_035838",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    1.0,
+    -0.2,
+    -11.3
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794707983.9,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0005_035943",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.4,
+    -0.2,
+    -11.7
+   ],
+   "g_stall": 1966
+  },
+  {
+   "t": 1794708013.8,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0006_040013",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.4,
+    1.4,
+    -10.9
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794708082.3,
+   "colour": "green",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0007_040122",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.6,
+    0.9,
+    -11.5
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794708105.6,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0008_040145",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.5,
+    -0.6,
+    -12.5
+   ],
+   "g_stall": 1913
+  },
+  {
+   "t": 1794708167.1,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0009_040247",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.0,
+    0.7,
+    -11.4
+   ],
+   "g_stall": 1886
+  },
+  {
+   "t": 1794708193.2,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0010_040313",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.3,
+    -0.4,
+    -11.8
+   ],
+   "g_stall": 1913
+  },
+  {
+   "t": 1794708260.3,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0011_040420",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.9,
+    0.3,
+    -12.1
+   ],
+   "g_stall": 1892
+  },
+  {
+   "t": 1794708285.6,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0012_040445",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -1.0,
+    1.1,
+    -11.3
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794708317.2,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0013_040517",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.7,
+    -0.1,
+    -12.0
+   ],
+   "g_stall": 1913
+  },
+  {
+   "t": 1794708377.9,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0014_040617",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    0.7,
+    -11.7
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794708403.0,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0015_040643",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.1,
+    0.9,
+    -11.8
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794708470.3,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_035534_vpick/ep0016_040750",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    1.1,
+    -0.7,
+    -11.5
+   ],
+   "g_stall": 1907
+  },
+  {
+   "t": 1794708540.0,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0001_040859",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.8,
+    0.9,
+    -11.0
+   ],
+   "g_stall": 1926
+  },
+  {
+   "t": 1794708605.0,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0002_041004",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.5,
+    0.8,
+    -11.3
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794708666.0,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0003_041106",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.4,
+    -12.0
+   ],
+   "g_stall": 1913
+  },
+  {
+   "t": 1794708688.3,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0004_041128",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.3,
+    -11.8
+   ],
+   "g_stall": 1885
+  },
+  {
+   "t": 1794708711.6,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0005_041151",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.2,
+    0.9,
+    -11.7
+   ],
+   "g_stall": 1927
+  },
+  {
+   "t": 1794708736.3,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0006_041216",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.4,
+    1.0,
+    -11.4
+   ],
+   "g_stall": 1926
+  },
+  {
+   "t": 1794708801.9,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0007_041321",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.5,
+    0.7,
+    -11.8
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794708868.5,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0008_041428",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.5,
+    0.1,
+    -11.4
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794708939.2,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_040838_vpick/ep0009_041539",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.1,
+    0.6,
+    -11.6
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794709004.2,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0001_041644",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.9,
+    0.1,
+    -11.2
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794709069.5,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0002_041749",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.9,
+    1.7,
+    -10.5
+   ],
+   "g_stall": 1922
+  },
+  {
+   "t": 1794709131.4,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0003_041851",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.9,
+    0.4,
+    -11.4
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794709198.7,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0004_041958",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.4,
+    0.6,
+    -11.8
+   ],
+   "g_stall": 1921
+  },
+  {
+   "t": 1794709265.6,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0005_042105",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    0.5,
+    1.0,
+    -10.9
+   ],
+   "g_stall": 1908
+  },
+  {
+   "t": 1794709332.4,
+   "colour": "blue",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0006_042212",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    1.8,
+    0.9,
+    -11.2
+   ],
+   "g_stall": 1886
+  },
+  {
+   "t": 1794709369.9,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0007_042249",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.0,
+    1.4,
+    -11.6
+   ],
+   "g_stall": 1912
+  },
+  {
+   "t": 1794709440.5,
+   "colour": "pink",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0008_042400",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    1.0,
+    -0.3,
+    -11.8
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794709468.9,
+   "colour": "pink",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0009_042428",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.3,
+    0.5,
+    -12.0
+   ],
+   "g_stall": 1907
+  },
+  {
+   "t": 1794709537.5,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0010_042537",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.0,
+    -1.1,
+    -11.3
+   ],
+   "g_stall": 1928
+  },
+  {
+   "t": 1794709604.1,
+   "colour": "green",
+   "success": false,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0011_042644",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -1.5,
+    -4.8,
+    -17.4
+   ],
+   "g_stall": 1886
+  },
+  {
+   "t": 1794709630.3,
+   "colour": "green",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0012_042710",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    1.4,
+    1.8,
+    -11.2
+   ],
+   "g_stall": 1925
+  },
+  {
+   "t": 1794709699.0,
+   "colour": "blue",
+   "success": true,
+   "params": {
+    "dz_mm": 0,
+    "dxy_mm": 0,
+    "yaw_off_deg": 0,
+    "open_frac": 1.0,
+    "approach_speed": 1.0
+   },
+   "episode": "20261115_041623_vpick/ep0013_042819",
+   "verified": null,
+   "n_bricks": 1,
+   "touch_mm": null,
+   "tcp_err_mm": [
+    -0.4,
+    0.4,
+    -11.8
+   ],
+   "g_stall": 1922
+  }
+ ]
+}

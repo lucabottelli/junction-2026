@@ -328,12 +328,13 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
 class VisionPick:
     """One pick with retries, same contract as policy.ActPick: run() -> (clamp command g_lock, info) or raises
     PickFailed / Stopped. A = arm.Arm, C = collect.Collector, S = capture state (frames, frame_t)."""
-    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None,
+    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None, smooth=False,
                  on_event=None, tuner=None):
         import policy as pol
         self.pol = pol
         self.A, self.C, self.S, self.kin, self.calib = A, C, S, kin, calib
         self.retries, self.speed = int(retries), float(speed)
+        self.smooth = bool(smooth)       # one continuous descent instead of six corrected steps (see attempt, step 2)
         self.check = check or (lambda: None); self.say = say or (lambda m, ok=True: None)
         self.debug_dir = Path(debug_dir) if debug_dir else None
         self.target = target                    # colour to pick; "random" = one of the colours seen, drawn once;
@@ -500,7 +501,17 @@ class VisionPick:
         info["off_ticks"] = {n: round(v) for n, v in off.items()}
         # 2. straight down in steps; stop early if the fingers stand on something (measured height stops following)
         q = q_hover; n = 6; touched = None; z_low = p[2] - Z_SEEK; steps = []; info["dz_steps_mm"] = steps
-        for s in range(1, n + 1):
+        info["smooth"] = self.smooth
+        if self.smooth:
+            # Smooth: one move from the hover to the grasp depth, then one sag correction without stopping in between.
+            # No stepwise sag correction and no contact stop on the way, so the depth can be a few mm less exact.
+            q, _ = kin.ik.solve(q, np.array([p[0], p[1], z_low]), yaw, iters=60)
+            self._goto(q, g_open, v_down, off); self._settle(0.3)
+            tgt = kin.ticks(q, g_open)
+            for n_ in off: off[n_] += max(-40.0, min(40.0, tgt[n_] - A.pos[n_]))
+            self._goto(q, g_open, 0.3, off); self._settle(0.3)
+            steps.append(round((kin.fk(self._q_now())[0][2] - z_low) * 1000, 1))
+        for s in ([] if self.smooth else range(1, n + 1)):
             z = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
             q, _ = kin.ik.solve(q, np.array([p[0], p[1], z]), yaw, iters=30)
             self._goto(q, g_open, v_down, off); self._settle(0.5)

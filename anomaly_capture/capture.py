@@ -1112,6 +1112,8 @@ if __name__ == "__main__":
         import feed                                                                 # hand-feed anomaly capture (/anomaly)
         frouter = feed.make_router(S, ARM, ACTX, crouter.collector, DATA, JOBS)
         app.include_router(frouter)
+        import autocollect                                                          # automatic pick -> WP2 photos -> put back
+        app.include_router(autocollect.make_router(S, ARM, ACTX, crouter.collector, srouter.sorter, frouter.feeder, DATA))
         if MOCK: mock_hw.attach(app, S, ARM, crouter.collector, srouter.sorter)
         print(f"control UI: http://127.0.0.1:{PORT}/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
     except Exception as e:

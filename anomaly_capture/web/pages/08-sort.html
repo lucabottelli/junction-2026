@@ -94,8 +94,9 @@
   <div class=split>
    <div class="card so-runcard">
     <div class=field><label>Pick</label><div class="seg full" id=so-pick>
-     <button data-v=handfeed onclick="soCfg('pick','handfeed')">Hand-feed</button><button data-v=teleop onclick="soCfg('pick','teleop')">Teleop with the leader</button><button data-v=act onclick="soCfg('pick','act')">ACT policy · autonomous</button></div>
+     <button data-v=handfeed onclick="soCfg('pick','handfeed')">Hand-feed</button><button data-v=teleop onclick="soCfg('pick','teleop')">Teleop with the leader</button><button data-v=act onclick="soCfg('pick','act')">ACT policy · autonomous</button><button data-v=vision onclick="soCfg('pick','vision')">Vision pick · scripted</button></div>
      <div class=hint id=so-pickhint></div></div>
+    <label class=switch><input type=checkbox id=so-vsmooth><span class=tr></span><span><b>Vision pick: smooth descent</b><span class=d>One continuous move down to the brick instead of six corrected steps. Looks better and records cleaner demos; the grasp depth is a few mm less exact, so the pick rate can drop.</span></span></label>
     <div class="so-act" id=so-act hidden>
      <div class=field><label for=so-amodel>Policy export</label>
       <div class=so-arow><select id=so-amodel></select><button class="btn sm ghost" onclick="soPolicies(true)" title="Look for exports again">Refresh</button></div>

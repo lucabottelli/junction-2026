@@ -38,3 +38,4 @@ episodes_sim_snap/
 tDataset2/
 anomaly_capture/MUJOCO_LOG.TXT
 anomaly_capture/*.before_front_move.*
+MUJOCO_LOG.TXT

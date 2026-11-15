@@ -47,7 +47,7 @@ const JS={shoulder_pan:'Pan',shoulder_lift:'Lift',elbow_flex:'Elbow',wrist_flex:
 // config inputs: [id, /sort/cfg key, kind]   (segments: pick, judge, release_cam)
 const CFG=[['so-tl','t_low'],['so-th','t_high'],['so-rt','retries'],['so-vd','view_deg'],['so-fd','finger_deg'],['so-mr','max_regrasps'],
  ['so-dev','device'],['so-fdev','fast_device'],['so-brick','brick'],['so-inc','allow_incomplete',1],['so-rel','release',1],['so-casc','cascade',1],
- ['so-amodel','act_model'],['so-adev','act_device'],['so-amode','act_mode'],['so-amax','act_max_s'],['so-aret','act_retries'],['so-aspd','act_speed']];
+ ['so-amodel','act_model'],['so-adev','act_device'],['so-amode','act_mode'],['so-amax','act_max_s'],['so-aret','act_retries'],['so-aspd','act_speed'],['so-vsmooth','vision_smooth',1]];
 
 let gotSort=false,faceSig='',photoSig='',roiSig='',plateSig='',brickSig='',polSig='',POL=null,polBusy=false;
 
@@ -216,7 +216,8 @@ function run(a,s){const c=(s&&s.cfg)||{};
  segOn('so-pick',c.pick);segOn('so-judge',c.judge);
  setH('so-pickhint',c.pick=='teleop'?'Match the leader, pick with it; the robot notices the grasp (G if it doesn’t) and carries the object to waypoint 1.'
   :c.pick=='handfeed'?'The robot waits at waypoint 1 with the gripper open; put the object between the fingers and press G.'
-  :c.pick=='act'?'From the start pose the trained policy picks the object from the input plate by itself; after a miss it lets go and tries again.':'');
+  :c.pick=='act'?'From the start pose the trained policy picks the object from the input plate by itself; after a miss it lets go and tries again.'
+  :c.pick=='vision'?'Scripted: the top camera finds the brick on the orange plate and the arm grasps it by geometry. No model.':'');
  actPanel(s,c);
  const mdl=$('so-model');if(mdl)mdl.classList.toggle('is-off',c.judge!='model');
  const fd=document.querySelector('#p-sort .so-fdev');if(fd)fd.classList.toggle('is-off',!c.cascade);

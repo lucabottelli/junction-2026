@@ -821,6 +821,20 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Held check by camera (03:50):** two blue "holds" at 03:40 and 03:44 had empty jaws (intel-ce: no block in the WP2 photos). Ticks cannot separate them: empty jaws jam on each other at 1860–1865, a held block reads 1867–1899. Now at WP1 the top camera looks at the plate; a block of the picked colour still there = "dropped" (`seen_after` in the log). Needs exactly one block per colour on the plate. The two episodes were relabelled `missed` (`20261115_033435_vpick/ep0007_034050`, `ep0012_034445`).
     - **Test with all of it, random colour:** `runs/acttest_20261115_035033` 7/8 held.
     - **Open:** why blocks tip over (suspect: the put-back after the photo poses); the wrist camera cannot tell a held pink block from the red jaws, so the camera check uses the plate, not the gripper.
+38. **Two SmolVLA runs on 159 episodes with different validation sets; smooth descent as a toggle** (2026-11-15 04:30–04:56, intel-f4, the user's go).
+    - **Collection result (intel-ce's runs, ended 04:28):** 77 recorded vision picks, **35 clean** (success and seen where set down: pink 14/37, blue 12/25, green 9/15). After the user stood the tipped blocks up: pink 6/7, blue 6/7.
+    - **Dataset `real124-vpick35-smolvla` (`c6c631af`):** 159 episodes, 55,807 frames = the 124 clean teleop picks + 35 verified vision picks. `export_act.py --episodes ~/junction26/episodes --episodes ~/junction26/tDataset2 --exclude qualia_exclude.txt --exclude tDataset2/qualia_exclude.txt --exclude tDataset2/vpick_unverified_exclude.txt` (the last file lists the 8 vision "successes" that were not verified). The export's pause compression takes 6–7 s of stop-and-go out of each vision pick.
+    - **Runs (second Modal account, app `physicalai-trainer-b`, H200, 64 CPU, 128 GB, batch 32, 60 workers, 12 epochs ≈ 19.9k steps, `val_split` 0.05, started 04:52):**
+      | Model | Job dir on the volume | Validation episodes |
+      |---|---|---|
+      | `smolvla-real124-vpick35-20k-A` | `jobs/f52ed47a-46a2-41c7-b7e3-71a38be69bfc` | 44, 45, 62, 68, 91, 130, 140 |
+      | `smolvla-real124-vpick35-20k-B` | `jobs/4c9a6f02-22a1-460d-a765-77d6cc176fcb` | 13, 28, 40, 56, 79, 92, 156 |
+      - Same data and settings; the split is drawn at random per run (no seed in the trainer), read from each container's log.
+      - 12 epochs, not 13: 13 would be 21.5k steps. Status: `scripts/modal_b_status2.sh`. Launch record: `runs/modal_b_launched_0450.json`. Not in Studio: import `artifact.zip` by hand.
+      - The older runs: `smolvla-new55-30k` completed 04:44; `smolvla-real124-40k` at 96 %.
+    - **Smooth descent (`vision_smooth`, off by default):** one move from the hover to the grasp depth plus one sag correction, instead of six corrected steps; no contact stop. Toggle on the Sort page ("Vision pick: smooth descent") and `POST /sort/cfg?vision_smooth=0|1`; the Sort page also got a "Vision pick · scripted" pick button. First test `runs/acttest_20261115_043452`: 5/8 held (stepped the same hour: 7/8), xy error up to 4 mm instead of ≈1 mm. Small sample.
+    - **Open:** one smooth "held" (trial 3 of `043452`, pink, 1865 ticks) has no `seen_after`: the camera check could not run there, so that hold is unconfirmed.
+
 
 
 ---

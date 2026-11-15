@@ -259,9 +259,13 @@ TICKS_SHUT, TICKS_PER_M = 1930.0, 9700.0     # gripper ticks with the jaws shut 
 MAX_GRASP_W = 0.052
 HOVER = 0.055            # m above the grasp point where the arm lines up before going down
 YAW_BIAS_DEG = -11.5     # FK jaw yaw minus the brick axis in 99 human grasps (median; IQR -17..-6): the model reads the jaws 11.5 deg off
-Z_SEEK = 0.004           # how far below the calibrated grasp height the descent may go looking for the plate (contact stops it)
+Z_SEEK = 0.012           # how far below the calibrated grasp height the descent may go looking for the plate (contact stops it)
 EMPTY_TICKS = 25         # fingers stopped fewer ticks than this above the closed end: nothing between them
 HELD_TICKS = 25          # fingers at least this far short of the squeeze command at waypoint 1: still holding
+RIM_SLACK = 0.02         # m a finger may stand outside the plate's flat part before a grasp counts as blocked
+MISS_PX, MISS_S = 45.0, 180.0     # a brick still within this many px of where a pick just failed (in the last MISS_S s) is
+LAST_MISS = {}                    # dragged to the plate's middle before the next try: {"px": (u, v), "t": time, "colour": name}
+DRAG_GAP = 0.065         # m the jaws are opened to straddle a brick that is dragged off the rim
 FINGER = 0.011           # half thickness of a jaw, for the clearance to the neighbours
 # What a grasp tuner may change per pick (grasp_tuner.Tuner.suggest); these values change nothing:
 NEUTRAL = {"dz_mm": 0.0,             # grasp height offset
@@ -299,7 +303,10 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
                 for j, o in enumerate(W):
                     if j == i: continue
                     clear = min(clear, min(np.linalg.norm(f - o["c"]) for f in fingers) - math.hypot(o["long"], o["short"]) / 2 - FINGER)
-                if pc is not None: clear = min(clear, min(pr - np.linalg.norm(f - pc) for f in fingers) + 0.02)
+                rim = 1.0                                                     # m the outer finger stays inside the flat part
+                if pc is not None:
+                    rim = float(min(pr - np.linalg.norm(f - pc) for f in fingers))
+                    clear = min(clear, rim + RIM_SLACK)
                 z = calib.z[0] + calib.z[1] * c[0] + calib.z[2] * c[1]
                 yaw = yaw + math.radians(calib.d.get("yaw_bias_deg", YAW_BIAS_DEG))    # model yaw that really lines the jaws up
                 q, err = kin.ik.solve(np.asarray(q_seed, np.float64)[:5].copy(), np.array([c[0], c[1], z]), yaw, iters=80)
@@ -310,7 +317,7 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
                 gap = width + FIX_CLEAR + MOV_CLEAR
                 out.append({"i": i, "xyz": [float(c[0]), float(c[1]), float(z)], "yaw": float(yaw), "q": q.tolist(),
                             "open": TICKS_SHUT + TICKS_PER_M * gap, "width": float(width), "clear": float(clear),
-                            "tilt": float(tilt), "dist": float(np.linalg.norm(w["c"])), "centre": w["c"].tolist(),
+                            "tilt": float(tilt), "dist": float(np.linalg.norm(w["c"])), "centre": w["c"].tolist(), "rim": rim,
                             "turn": float(abs(q[4] - q_seed[4]))})
     # nearest brick first; a blocked grasp (fingers would land on a neighbour) goes behind every free one
     out.sort(key=lambda g: (g["clear"] < 0.004, round(g["dist"] / 0.015), -min(g["clear"], 0.02), g["turn"]))
@@ -392,6 +399,47 @@ class VisionPick:
             try: cv2.imwrite(str(self.debug_dir / f"{time.strftime('%H%M%S')}_{name}"), img, [cv2.IMWRITE_JPEG_QUALITY, 85])   # one set per trial
             except Exception: pass
 
+    # ---- a brick on the rim: drag it to the flat middle first
+    def drag_in(self, b, plate, tag=""):
+        """The brick lies on / against the plate's raised rim (often tipped): a grasp there puts a finger on the rim,
+        clamps the plate and misses. Straddle it with wide-open jaws, the rear jaw on the rim side, and drag it toward
+        the plate's centre. Nothing is closed. -> True if the drag was made (look again after it)."""
+        A, C, kin = self.A, self.C, self.kin
+        c = self.calib.xy(*b["c"]); pc = self.calib.xy(*plate[:2])
+        R = plate[2] * self.calib.mm_per_px(*plate[:2]) / 1000.0
+        v = pc - c; dist = float(np.linalg.norm(v))
+        if dist < 1e-3: return False
+        u = v / dist; travel = min(0.075, max(0.03, dist - 0.30 * R))
+        z = float(self.calib.xyz(*b["c"])[2])
+        g_open = min(A.fl["gripper"][1], TICKS_SHUT + TICKS_PER_M * DRAG_GAP)
+        q0 = kin.rad(C.wps("wp1")[0]["pos"]); best = None
+        for back in (0.014, DRAG_GAP - 0.046):          # rear jaw = the fixed one (yaw along u) / the moving one (yaw against u)
+            yaw = math.atan2(u[1], u[0]) + (0.0 if back == 0.014 else math.pi)
+            start = c - u * back if back == 0.014 else c + u * back
+            q, err = kin.ik.solve(np.asarray(q0, np.float64)[:5].copy(), np.array([start[0], start[1], z + HOVER]), yaw, iters=80)
+            _, got, _ = kin.fk(q); roll = kin.ticks(q, 0)["wrist_roll"]
+            ok = err <= 0.004 and abs((got - yaw + math.pi) % (2 * math.pi) - math.pi) <= math.radians(12) \
+                and A.fl["wrist_roll"][0] + 30 <= roll <= A.fl["wrist_roll"][1] - 30
+            if ok and (best is None or abs(q[4] - q0[4]) < best[3]): best = (q, yaw, start, abs(q[4] - q0[4]))
+        if best is None: return False
+        q, yaw, start, _ = best
+        self.say("the brick is on the plate's rim: dragging it to the middle first")
+        self._goto(q, g_open, 1.0); off = self._servo_in(q, g_open); zz = z + HOVER
+        for s_ in range(1, 6):                                            # down in steps; stop where the fingers stand on the rim
+            zz = z + HOVER * (1 - s_ / 5)
+            q, _ = kin.ik.solve(q, np.array([start[0], start[1], zz]), yaw, iters=30)
+            self._goto(q, g_open, 0.45, off); self._settle(0.4)
+            if kin.fk(self._q_now())[0][2] - zz > 0.006: zz = float(kin.fk(self._q_now())[0][2]) + 0.002; break
+        self._snap(f"{tag}drag0")
+        for s_ in range(1, 5):                                            # the drag, at that height
+            p = start + u * travel * s_ / 4
+            q, _ = kin.ik.solve(q, np.array([p[0], p[1], zz]), yaw, iters=30)
+            self._goto(q, g_open, 0.3, off)
+        self._snap(f"{tag}drag1")
+        q, _ = kin.ik.solve(q, np.array([p[0], p[1], z + HOVER + 0.02]), yaw, iters=40)
+        self._goto(q, g_open, 0.7, off)
+        return True
+
     # ---- one attempt
     def attempt(self, k, tag=""):
         A, C, kin = self.A, self.C, self.kin
@@ -415,11 +463,20 @@ class VisionPick:
         g = next((x for x in plans if key(x) not in self.tried), plans[0])    # a retry takes another jaw direction / brick
         self.tried.add(key(g))
         b = bricks[g["i"]]
+        if plate is not None and not getattr(self, "_dragged", False):   # on the rim: one drag to the middle, then a fresh look
+            lm = LAST_MISS                                                 # the last pick failed on this very brick
+            if lm and time.time() - lm["t"] < MISS_S and lm["colour"] == b["colour"] \
+                    and math.hypot(b["c"][0] - lm["px"][0], b["c"][1] - lm["px"][1]) < MISS_PX:
+                self._dragged = True; self._save(f"{tag}look_rim.jpg", draw(f, bricks, plate, pick=g["i"]))
+                if self.drag_in(b, plate, tag):
+                    C.goto(C.wps("home")[0]["pos"], gripper=A.cmd["gripper"]); self.tried.discard(key(g))
+                    return self.attempt(k, tag)
         self.plate = plate; self.seen = [x["c"] for x in every if x is not b]      # for setting it down again
         self._save(f"{tag}look.jpg", draw(f, bricks, plate, pick=g["i"]))
         info = {"brick": b["colour"], "px": [round(v, 1) for v in b["c"]], "angle": round(b["angle"], 1), "xyz": [round(v, 4) for v in g["xyz"]],
                 "yaw": g["yaw"], "width_mm": round(g["width"] * 1000, 1), "clear_mm": round(g["clear"] * 1000, 1),
-                "n_bricks": len(bricks), "tilt_deg": round(math.degrees(g["tilt"]), 1)}
+                "n_bricks": len(bricks), "tilt_deg": round(math.degrees(g["tilt"]), 1), "rim_mm": round(g.get("rim", 1.0) * 1000, 1),
+                "dragged": bool(getattr(self, "_dragged", False))}
         self.live = {"attempt": k + 1, "brick": b["colour"], "bricks": len(bricks)}
         self.say(f"vision pick {k + 1}/{self.retries + 1}: {b['colour']} brick, {len(bricks)} on the plate")
         if self.tuner is not None:
@@ -442,7 +499,7 @@ class VisionPick:
         info["hover_err_mm"] = [round(v * 1000, 1) for v in (kin.fk(self._q_now())[0] - (p + [0, 0, HOVER]))]
         info["off_ticks"] = {n: round(v) for n, v in off.items()}
         # 2. straight down in steps; stop early if the fingers stand on something (measured height stops following)
-        q = q_hover; n = 5; touched = None; z_low = p[2] - Z_SEEK; steps = []; info["dz_steps_mm"] = steps
+        q = q_hover; n = 6; touched = None; z_low = p[2] - Z_SEEK; steps = []; info["dz_steps_mm"] = steps
         for s in range(1, n + 1):
             z = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
             q, _ = kin.ik.solve(q, np.array([p[0], p[1], z]), yaw, iters=30)
@@ -485,6 +542,14 @@ class VisionPick:
         # Held = the fingers still stand short of the squeeze command. An absolute width fails here: a 2x2 reads
         # 1872-1899 ticks depending on how it sits in the jaws, while empty jaws run on to the command / touch each other.
         if A.pos["gripper"] - g_lock < HELD_TICKS: return "dropped", info
+        # The ticks alone are not enough: empty jaws that jam on each other read 1860-1865, a held brick 1867-1899
+        # (two empty "holds" on 11-15 03:40/03:44). At WP1 the arm is clear of the plate, so look: if a brick of the
+        # picked colour still lies on the plate, the gripper is empty.
+        try:
+            _, left, _ = self.look()
+            info["seen_after"] = sorted({x["colour"] for x in left})
+            if b["colour"] in COLOURS and any(x["colour"] == b["colour"] for x in left): return "dropped", info
+        except self.pol.PickFailed: pass
         self.g_lock = g_lock
         return "held", info
 
@@ -531,7 +596,9 @@ class VisionPick:
                 res, info = self.attempt(k, tag=f"a{k + 1}_")
                 self.attempts.append({"attempt": k + 1, "result": res, "t_s": round(time.time() - t0, 2), **info})
                 if res == "held":
-                    return self.g_lock, self.info(True, t_run)
+                    LAST_MISS.clear(); return self.g_lock, self.info(True, t_run)
+                if res in ("empty", "dropped") and info.get("px"):
+                    LAST_MISS.clear(); LAST_MISS.update(px=tuple(info["px"]), t=time.time(), colour=info.get("brick"))
                 reasons.append({"landed": "the fingers came down on the brick", "empty": "closed on nothing",
                                 "dropped": "lost it on the way to waypoint 1", "unreachable": "no reachable grasp"}[res])
                 if k < self.retries:

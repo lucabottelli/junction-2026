@@ -794,6 +794,33 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
 
 
 
+37. **Re-clamp flow checked against the coverage logic; not yet run on the arm** (2026-11-15 ≈03:50, the user's spec, no code change).
+    - **The user's flow:** photo at WP2 → gentle set-down → re-clamp turned 90° → judge at WP2 → defect plate if anomalous, else re-clamp another 90° → good plate after the third showing passes.
+    - **Already built:** `sorter._inspect` does exactly this loop (early stop on a defect, `collect.place_on_tape` for the set-down, `collect.regrip` with one retry, `coverage.py` tracks seen and missing sides). A re-clamp that needed its retry never gives GOOD.
+    - **Gap in the flow:** a block has 4 side faces and each grip turns one new side to the camera, so 3 showings (2 re-clamps) leave one side unseen. `coverage.plan` results:
+      | WP2 poses ticked | Re-clamps | Complete | Surface seen |
+      |---|---|---|---|
+      | front only (today: no ticks set) | 2 | no | 47 % |
+      | front + up + down | 2 | no (both finger sides uncredited) | 79 % |
+      | front + up + down | 3 | yes | 100 % |
+      | front + back (wrist roll 180°) + up + down | 1 | yes | 100 % |
+      | front + back + down + wrist top photo | 1 | yes | 100 % |
+    - **Recommendation:** add a back pose at WP2 (roll ≈ 875 + 2048 = 2923 ticks, limits 0–4090; a 180° roll at WP2 was already done on the arm at 21:14, issue 14). One re-clamp then covers everything, and the re-clamp is the least reliable step.
+    - **Still open on the station:** `tape_regrip` (+ `_above`), `sort_good`, `sort_defect` are not taught; no `runs/regrip_test_*` exists; the side ticks on `/sort` are empty; all good crops so far are grip-1 views (auto-collect and hand-feed never re-clamp); no models are trained.
+    - **User's decision (≈04:05): four showings = 3 re-clamps, no back pose.** Set on the live server: `max_regrasps` 3; side ticks `wp2-1` front, `wp2-3` front + down, `wp2-2` down. The ticks are an estimate from the kinematic model and the stored photos and need a check with a marked block.
+    - **The palm-side face (top when picked) is not seen at WP2:** finger elevation is −19° (`wp2-1`), +11° (`wp2-3`), +40° (`wp2-2`), a 59° spread toward the fingertip side only, and every re-clamp turns about the vertical, so that face stays under the palm in all four showings. It is covered only by the wrist top photo on the tape spot (taken at the first set-down). Plan with it: complete, 3 re-clamps, 10 photos. Without it: 91 %, top missing. So a wrist model per block and `tape_top` training photos are required.
+    - **Not done on purpose:** a re-clamp option for auto-collect. `autocollect.py` was being edited by another session (03:46) and the mock has no vision pick to test it on.
+37. **Vision pick inside the automatic photo collection: every pick recorded to WP1; grasp depth, held check by camera, drag recovery** (2026-11-15 03:05–03:56, intel-f4 with intel-ce).
+    - **Recording (the user's request):** intel-ce's `autocollect.py` records each vision pick with `sorter.VRecorder` from the start pose to WP1 (`retries=0`), then takes its WP2 photos and puts the block back. Episodes: `tDataset2/<time>_vpick/`, `source: "vpick"`. First three checked: all cameras complete, largest frame gap 34 ms, end within 53 ticks of WP1.
+    - **No training run starts before the user has seen the pick counts** (the user's rule, 03:12).
+    - **Grasp depth (03:18):** pink held only 5 of 14 in the first collection runs. Photos: block between the jaws, but the tips reached only halfway down and pinched it out. `Z_SEEK` 0.004 → 0.012 (descent ends ≈12 mm below the calibrated grasp height; it never touched the plate). Pink after: 12/15 (`runs/acttest_20261115_031834` 5/5, `032144` 7/10).
+    - **What the remaining misses are:** a block tipped on its side, usually leaning on the plate rim; the arm then misses it again and again (pink 4× at 03:32–03:34). Distance from the plate centre alone does not predict a miss (upright blocks at the same radius are picked), so no rim rule was added.
+    - **Drag recovery (03:50, `vpick.drag_in`, `LAST_MISS`):** after a failed pick, if the same-colour block is still within 45 px at the next pick (within 3 min), the arm straddles it with open jaws, drags it toward the plate's middle, looks again and picks. Before the recorded "start", so not in the episode. One case so far: `035033` trial 1 pink missed, trial 2 dragged and held.
+    - **Held check by camera (03:50):** two blue "holds" at 03:40 and 03:44 had empty jaws (intel-ce: no block in the WP2 photos). Ticks cannot separate them: empty jaws jam on each other at 1860–1865, a held block reads 1867–1899. Now at WP1 the top camera looks at the plate; a block of the picked colour still there = "dropped" (`seen_after` in the log). Needs exactly one block per colour on the plate. The two episodes were relabelled `missed` (`20261115_033435_vpick/ep0007_034050`, `ep0012_034445`).
+    - **Test with all of it, random colour:** `runs/acttest_20261115_035033` 7/8 held.
+    - **Open:** why blocks tip over (suspect: the put-back after the photo poses); the wrist camera cannot tell a held pink block from the red jaws, so the camera check uses the plate, not the gripper.
+
+
 ---
 
 ## 5. Issues and fixes log

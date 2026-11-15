@@ -68,7 +68,7 @@ def test_every_get_route(mock_server, schema):
 def test_every_ui_page_and_static(mock_server):
     srv = mock_server
     paths = [re.search(r'data-path="([^"]+)"', f.read_text()).group(1) for f in sorted((AC / "web" / "pages").glob("*.html"))]
-    assert "/" in paths and "/sort" in paths
+    assert "/dev" in paths and "/sort" in paths
     n_sections = len(list((AC / "web" / "pages").glob("*.html")))
     for p in paths:
         r = srv.http.get(p)

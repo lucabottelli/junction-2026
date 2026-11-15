@@ -101,7 +101,7 @@ class Sorter:
                     # pick = "act" (policy.py): Studio export dir, OpenVINO device, export backend, limits per pick
                     "act_model": "", "act_device": "GPU", "act_backend": "auto", "act_mode": "chunk",
                     "act_max_s": 20.0, "act_retries": 2, "act_speed": 1.0,
-                    "vision_smooth": False}      # pick = "vision": one continuous descent instead of corrected steps
+                    "vision_smooth": False, "vision_fast": True}      # pick = "vision": one continuous descent instead of corrected steps
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
         self.state, self.msg, self.ok = "idle", "teach the two plates, tick what each WP2 pose shows, then START", True
@@ -242,13 +242,181 @@ class Sorter:
         self.act = vp.VisionPick(self.A, self.C, self.S, kin, cal, retries=o.get("retries", c["act_retries"]), speed=c["act_speed"],
                                  check=self.check, say=self.say, debug_dir=self._vdir,
                                  target=o.get("target", c["brick"] if c.get("vision_colour") else None),
-                                 on_event=o.get("on_event"), tuner=o.get("tuner"), smooth=bool(c.get("vision_smooth")))
+                                 on_event=o.get("on_event"), tuner=o.get("tuner"), smooth=bool(c.get("vision_smooth")), fast=bool(c.get("vision_fast")),
+                                 force=o.get("force"))
         self.act.tag = tag
         try:
             g_lock, self.act_info = self.act.run()
         except pol.PickFailed as e:
             self.act_info = e.info; raise
         return g_lock
+
+    def regrip_vision(self, g_lock, k=1, retries=1, sign=None):
+        """Re-clamp turned 90 deg on the TAPE SPOT, using the taught waypoints for the set-down and the arm's own
+        release pose for the new grasp (2026-11-15 07:50, the user's rules).
+          1. WP1 -> tape_above -> tape_place with the clamp kept at g_lock: the gripper values stored in those two
+             poses are IGNORED, the block must stay held until it stands on the tape spot.
+          2. Read the measured pose there (FK: where the block now is), open, move the fixed jaw 6 mm off the block,
+             straight up.
+          3. vpick.grasp_world at that very spot with the jaws turned +90 deg, or -90 deg if +90 is out of reach:
+             hover, stepwise descent with sag correction and contact stop, close until the fingers stall, lift.
+          4. WP1; the top camera checks that the tape spot is empty (the block really left with the gripper).
+        No pixel calibration is used for the grasp: the homography is fitted on the plate and was ~37 mm off here.
+        sign = +1 / -1: only that turn direction (a caller that needs every re-clamp of a block to turn the same way).
+        cfg regrip_e_mm = [ex, ey]: where the held block's centre really is against the model's grasp point, in the
+        gripper frame at the release (x = fixed -> moving jaw, y = 90 deg left of it). The model's wrist-roll axis is
+        not where the real one is, so a 90 deg turn about it lands beside the block (07:49 run: jaws 14 mm off along
+        the old jaw axis, 5 mm along the new one -> e = (-9.5, -4.5) mm; issue 14 measured 11 mm under a 180 deg roll).
+        -> (new clamp command, info incl. turn_deg). Raises pol.PickFailed: the block then stands on the tape spot."""
+        import math
+        vp, kin, cal = self.get_vision(); V = self.act; C = self.C; A = self.A
+        if V is None or not getattr(V, "attempts", None): raise RuntimeError("re-clamp: needs a vision pick before it")
+        last = V.attempts[-1]; colour = last.get("brick")
+        try: above, place = C.tape_poses()
+        except Exception: raise RuntimeError("re-clamp: teach 'Above the tape spot' and 'On the tape spot' first")
+        gmin, gmax = A.fl["gripper"]; spd = C.cfg["speed"]; wp1 = C.wps("wp1")[0]["pos"]
+        self.state = "regrasp"; self.say(f"re-clamp {k}: carrying the {colour} block to the tape spot (clamp kept)")
+        C.goto(above, gripper=g_lock)
+        C.goto(place, spd * 0.3, gripper=g_lock); time.sleep(0.3)
+        q_rel = np.array(kin.rad(A.pos), np.float64); tcp, yaw_rel, _ = kin.fk(q_rel)
+        held = A.pos["gripper"] - g_lock >= vp.HELD_TICKS
+        rel = {"k": k, "release_xyz_mm": [round(float(x) * 1000, 1) for x in tcp], "release_yaw_deg": round(math.degrees(yaw_rel), 1),
+               "held_at_set_down": bool(held), "g_at_set_down": round(A.pos["gripper"]),
+               "place_err_deg": round(max(abs(A.pos[n] - place[n]) for n in BODY) / TICK_PER_DEG, 1)}
+        self.regrip_rel = rel
+        if not held: raise pol.PickFailed("re-clamp: the block was lost on the way to the tape spot", retry=False)
+        g_rel = min(gmax, max(A.pos["gripper"] + 330, gmin + 480))
+        C.goto(dict(A.cmd), 0.4, gripper=g_rel); time.sleep(0.2)             # let go
+        bias = math.radians(cal.d.get("yaw_bias_deg", vp.YAW_BIAS_DEG))
+        x = np.array([math.cos(yaw_rel - bias), math.sin(yaw_rel - bias), 0.0])      # the jaws' real axis, fixed -> moving
+        q2, _ = kin.ik.solve(q_rel[:5].copy(), tcp - 0.006 * x, yaw_rel, iters=30)    # fixed jaw off the block's face
+        V._goto(q2, g_rel, 0.3)
+        q3, _ = kin.ik.solve(np.array(q2).copy(), tcp - 0.006 * x + [0, 0, vp.HOVER], yaw_rel, iters=40)
+        V._goto(q3, g_rel, 0.6)                                               # straight up
+        # the block's size along the new jaw direction: the other side of what the pick measured
+        w_held = float(last.get("width_mm") or 32.0); size = last.get("size_mm") or [w_held, w_held]
+        square = size[0] / max(1e-6, size[1]) < vp.SQUARE
+        if square: other = min(40.0, max(30.0, w_held)); turns = (90, -90)
+        elif self.cfg.get("regrip_long"): other = size[0] if abs(w_held - size[1]) <= abs(w_held - size[0]) else size[1]; turns = (90, -90)
+        else:
+            # A block that is not square (the green 2x3) is NOT gripped along its long side: the jaws then press on the
+            # two small ends and the block squirts out sideways (07:57 run: held once, pushed away twice). It is turned
+            # 180 deg instead: gripped across the short side again, the opposite end toward the camera. Its two long
+            # sides stay under the fingers (out["hidden"]).
+            other = min(40.0, max(30.0, w_held)); turns = (180,)
+        if sign in (1, -1) and turns != (180,): turns = (90 * sign,)
+        other = min(50.0, max(30.0, other)) / 1000.0
+        centre = tcp[:2] + max(0.0, w_held / 1000.0 - vp.REF_W) / 2 * x[:2]
+        # Two measured offsets (mm, release gripper frame: x = fixed -> moving jaw, y = 90 deg left of it):
+        #   a = where the held block's centre really is against the model's grasp point at the release,
+        #   b = where the jaws really close against the model's grasp point (turns with the jaws).
+        # Fitted on two misses seen by the top camera: +90 deg needed (-14, +5) (07:49, then 7 of 8 held), 180 deg
+        # needed (-19, +14) (08:01, jaws 23 mm short along the block). c(turn) = a - R(turn) b reproduces both.
+        ra = np.array(self.cfg.get("regrip_a_mm") or [-21.0, 7.0], np.float64) / 1000.0
+        rb = np.array(self.cfg.get("regrip_b_mm") or [2.0, 7.0], np.float64) / 1000.0
+        yv = np.array([-x[1], x[0]])                                          # 90 deg left of the release jaw axis
+        def target(deg):                                                      # block centre for a grasp turned by deg
+            t_ = math.radians(deg)
+            rbt = np.array([rb[0] * math.cos(t_) - rb[1] * math.sin(t_), rb[0] * math.sin(t_) + rb[1] * math.cos(t_)])
+            c_ = ra - rbt
+            return centre + c_[0] * x[:2] + c_[1] * yv
+        res, info, turn, tries = None, {}, None, 0
+        for a in range(retries + 1):
+            for deg in turns:
+                self.say(f"re-clamp {k}: gripping the {colour} block turned {deg:+d}°" + (" (again)" if a else ""))
+                res, info = V.grasp_world(target(deg), float(tcp[2]), yaw_rel + math.radians(deg), other, tag=f"rg{k}_{a + 1}_", turn=math.radians(deg))
+                if res != "unreachable": turn = deg; break
+            tries += 1
+            if res in ("held", "unreachable"): break
+        out = {**rel, "turn_deg": turn, "hidden": "the two long sides (not square: turned 180°)" if turns == (180,) else None, "result": res, "attempts": tries, "width_mm": round(other * 1000, 1), **{f"g_{k_}": v for k_, v in info.items()}}
+        self.regrip_rel = out
+        if res != "held":
+            why = {"empty": "the fingers closed on nothing", "landed": "the fingers came down on the block", "dropped": "the block slipped while lifting",
+                   "unreachable": "neither +90° nor -90° is in reach at the tape spot"}.get(res, str(res))
+            raise pol.PickFailed(f"re-clamp failed: {why}", retry=False)
+        g = V.g_lock
+        C.rise(wp1); C.goto(wp1, gripper=g); time.sleep(0.3)
+        out["g_wp1"] = round(A.pos["gripper"]); out["g_lock"] = round(g)
+        if A.pos["gripper"] - g < vp.HELD_TICKS: raise pol.PickFailed("re-clamp failed: the block was lost on the way to waypoint 1", retry=False)
+        try:                                                                  # camera: is the tape spot empty now?
+            u, v = cal.px(float(tcp[0]), float(tcp[1])); d = self.cfg.get("regrip_off_px") or [0.0, 0.0]
+            fr, _, _ = V.look(); mm = cal.mm_per_px(u, v)
+            still = [b for b in vp.detect(fr, mm_per_px=mm, at=(u + d[0], v + d[1], 60.0 / mm))[0] if b["colour"] == colour]
+            out["spot_seen_after"] = [[round(b["c"][0]), round(b["c"][1])] for b in still]
+            if still and A.pos["gripper"] - g < vp.SURE_TICKS:
+                raise pol.PickFailed("re-clamp failed: the block still stands on the tape spot", retry=False)
+        except pol.PickFailed as e:
+            if "re-clamp failed" in str(e): raise
+        V.attempts.append({**last, "result": "held", "width_mm": round(other * 1000, 1), "regrip": k, "turn_deg": turn})
+        return g, out
+
+    def regrip_spot(self):
+        """(u, v, mm per px, height against the plate plane in m) of the re-clamp spot in the top frame: cfg regrip_px,
+        else where tape_place is taught."""
+        vp, kin, cal = self.get_vision(); C = self.C
+        if self.cfg.get("regrip_px"): u, v = [float(x) for x in self.cfg["regrip_px"]]
+        else:
+            tp = C.slot("tape_place")
+            if not tp: raise RuntimeError("re-clamp: teach 'On the tape spot' (tape_place) first, it marks the re-clamp spot")
+            t = kin.fk(kin.rad(tp[0]["pos"]))[0]; u, v = cal.px(t[0], t[1])
+        return u, v, cal.mm_per_px(u, v), float(self.cfg.get("regrip_dz_mm", -9.0)) / 1000.0
+
+    def spot_force(self, yaw):
+        """VisionPick force options for a brick on the re-clamp spot. yaw = jaw yaw at the release (the grasp is then
+        turned 90 deg from it) or None (any jaw direction: fetching a brick that was left there)."""
+        u, v, mm, _ = self.regrip_spot(); r = 55.0 if yaw is not None else 100.0     # fetching a left brick: look wider
+        return {"px": [float(u), float(v)], "yaw": yaw, "max_px": (r - 10.0) / mm, "off_px": self.cfg.get("regrip_off_px"),
+                "at": [float(u), float(v), r / mm], "seek": 0.016}      # 55 mm: clear of the yellow plate (its rim reads green)
+
+    def regrip_test(self, colour, n=3, put_back=True):
+        """Live test of regrip_vision: pick the `colour` brick, re-clamp it n times (each turned +90 deg), put it
+        back. Log: runs/regripv_<time>/steps.jsonl + the look / hover / low frames of every pick."""
+        A, C = self.A, self.C
+        self.active = True; A.running = True; C.active = True
+        for e in (self.stop_flag, A.stop, C.stop_flag): e.clear()
+        self.session = datetime.now().strftime("regripv_%Y%m%d_%H%M%S")
+        d = self.RUNS / self.session; d.mkdir(parents=True, exist_ok=True)
+        self._vdir = d; self._vopt = {"target": colour, "retries": 2}; done = 0
+        def log(rec):
+            with open(d / "steps.jsonl", "a") as f: f.write(json.dumps(rec) + "\n")
+        try:
+            home = C.wps("home")[0]["pos"]; g_open = self.g_open()
+            # a brick left on the re-clamp spot by an earlier run: take that one (any jaw direction), else the plate
+            vp, kin, cal = self.get_vision(); u, v, mm, _ = self.regrip_spot()
+            C.goto(home, gripper=g_open)
+            frame, _, _ = vp.VisionPick(A, C, self.S, kin, cal, check=self.check, say=self.say).look()
+            left = [b for b in vp.detect(frame, mm_per_px=mm, at=(u, v, 100.0 / mm))[0] if b["colour"] in ("pink", "blue")]
+            left += [b for b in vp.detect(frame, mm_per_px=mm, at=(u, v, 48.0 / mm))[0] if b["colour"] == "green"]   # near only: the yellow plate reads green
+            if left:
+                b = min(left, key=lambda x: (x["c"][0] - u) ** 2 + (x["c"][1] - v) ** 2)
+                self.say(f"a {b['colour']} brick lies on the re-clamp spot: starting with that one")
+                self._vopt = {"target": b["colour"], "retries": 2, "force": self.spot_force(None)}
+            t0 = time.time()
+            try: g_lock = self.pick_vision(tag="p0_")
+            except pol.PickFailed as e:
+                log({"k": 0, "ok": False, "from_spot": bool(left), "error": str(e), "act": self.act_info}); raise
+            log({"k": 0, "ok": True, "from_spot": bool(left), "t_s": round(time.time() - t0, 1), "attempts": (self.act_info or {}).get("n_attempts"),
+                 "at": {k_: ((self.act_info or {}).get("attempts") or [{}])[-1].get(k_) for k_ in ("touch_mm", "tcp_err_mm", "g_stall", "width_mm", "px")}})
+            for k in range(1, n + 1):
+                self.check(); t0 = time.time()
+                try:
+                    g_lock, info = self.regrip_vision(g_lock, k)
+                except pol.PickFailed as e:
+                    log({"k": k, "ok": False, "error": str(e), "t_s": round(time.time() - t0, 1), "release": getattr(self, "regrip_rel", None),
+                         "act": self.act_info}); raise
+                done = k; log({**info, "ok": True, "t_s": round(time.time() - t0, 1)})
+                self.say(f"re-clamp {k}/{n} held ({info['attempts']} attempt{'s' * (info['attempts'] != 1)}, {time.time() - t0:.0f} s)")
+            if put_back: self.place_and_look(n, g_lock, home, g_open, d)
+            self.state = "done"; self.say(f"✓ RE-CLAMP TEST: {done}/{n} re-clamps held · log: runs/{self.session}")
+        except Stopped:
+            self.state = "stopped"; self.say("STOPPED: arm holds its position", False)
+        except Exception as e:
+            self.state = "error"; self.say(f"RE-CLAMP TEST: {done}/{n} held, then: {e} (arm holds its position) · log: runs/{self.session}", False)
+        finally:
+            self._vopt = None
+            try: C.hold_here()
+            except Exception: pass
+            self.active = False; A.running = False; C.active = False
 
     def pick(self):
         p = self.cfg["pick"]
@@ -807,6 +975,20 @@ def make_router(S, A, ctx, C, DATA, ROOT):
         threading.Thread(target=T.run, args=(max(1, n),), daemon=True).start()
         time.sleep(0.1); return T.status()
 
+    @r.post("/sort/regrip_test")
+    def regrip_test(colour: str = "blue", n: int = 3, put_back: bool = True):
+        """Camera-guided re-clamp test (see Sorter.regrip_test): the brick starts on the start plate."""
+        def bad(m): T.say(m, False); return T.status()
+        if T.active or C.active or A.running: return bad("busy: STOP the running job first")
+        if A.f is None: return bad("connect the arm first (section 1)")
+        try:
+            for k in ("home", "wp1"): C.wps(k)
+        except Exception as e: return bad(str(e))
+        if "top" not in S.live: return bad("the re-clamp needs the top camera, which is not live")
+        if colour not in ("pink", "green", "blue"): return bad("colour must be pink, green or blue")
+        threading.Thread(target=T.regrip_test, args=(colour, max(1, min(12, n)), bool(put_back)), daemon=True).start()
+        time.sleep(0.1); return T.status()
+
     @r.post("/sort/act_test")
     def act_test(n: int = 1, put_back: bool = True, mode: str = "act", record: bool = False, target: str = ""):
         """Pick-only ACT test (see Sorter.act_test): needs home + wp1 and a policy export, nothing else."""
@@ -897,7 +1079,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
             retries: int = -1, allow_incomplete: int = -1, release: int = -1, release_cam: str = "", cascade: int = -1,
             fast_device: str = "", view_deg: float = -1, finger_deg: float = -1, max_regrasps: int = -1,
             act_model: str = None, act_device: str = "", act_backend: str = "", act_mode: str = "", act_max_s: float = -1,
-            act_retries: int = -1, act_speed: float = -1, vision_smooth: int = -1):
+            act_retries: int = -1, act_speed: float = -1, vision_smooth: int = -1, vision_fast: int = -1):
         if pick in ("handfeed", "teleop", "act", "vision"): T.cfg["pick"] = pick
         if act_model is not None: T.cfg["act_model"] = act_model.strip()
         if act_device in pol.DEVICES: T.cfg["act_device"] = act_device
@@ -907,6 +1089,7 @@ def make_router(S, A, ctx, C, DATA, ROOT):
         if 0 <= act_retries <= 5: T.cfg["act_retries"] = act_retries
         if 0.1 <= act_speed <= 1: T.cfg["act_speed"] = act_speed
         if vision_smooth in (0, 1): T.cfg["vision_smooth"] = bool(vision_smooth)
+        if vision_fast in (0, 1): T.cfg["vision_fast"] = bool(vision_fast)
         if T._pol and T._pol[0] != (T.cfg["act_model"], T.cfg["act_device"], T.cfg["act_backend"]) and not T.active:
             T.drop_policy()
         if judge in ("manual", "model"): T.cfg["judge"] = judge

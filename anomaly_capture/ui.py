@@ -1,4 +1,4 @@
-"""The control UI for the whole project: http://127.0.0.1:7870/
+"""The control UI for the whole project: http://127.0.0.1:7870/  (user page: web/operator.html at / ; dev interface: /dev)
 
 A single-page app assembled from the files in web/ on EVERY request (edit a file, reload the browser; no restart):
   web/shell.html        frame: head, icon sprite, sidebar, top bar, toasts, modal + {{CSS}} {{PAGES}} {{SCRIPTS}}
@@ -63,12 +63,19 @@ def serve():
     return HTMLResponse(render(), headers=NO_STORE)
 
 
+def operator():
+    """The user-facing page (web/operator.html, standalone): cameras, run the sort task, results. Served at /.
+    Everything above is the dev interface; its overview moved from / to /dev (Dev menu on the user page)."""
+    f = WEB / "operator.html"
+    return HTMLResponse(_read(f), headers=NO_STORE) if f.exists() else serve()
+
+
 # One route per page path, read from the page files at start-up (a NEW page file needs a server restart;
 # editing an existing one doesn't). Explicit paths, never a catch-all: routers included after this one
 # (collect.py) must keep their GET routes.
-PATHS = sorted({p for _, p, _ in _pages() if p} | {"/"})
+PATHS = sorted({p for _, p, _ in _pages() if p} | {"/", "/dev"})
 for _p in PATHS:
-    router.add_api_route(_p, serve, methods=["GET"], include_in_schema=False)
+    router.add_api_route(_p, operator if _p == "/" else serve, methods=["GET"], include_in_schema=False)
 
 
 @router.get("/arm", include_in_schema=False)

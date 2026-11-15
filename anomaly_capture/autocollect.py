@@ -20,6 +20,8 @@ arm is at WP1; the WP2 photos and the put-back are not in it. Episodes: episodes
 import json, threading, time
 from datetime import datetime
 
+import cv2
+import numpy as np
 from fastapi import APIRouter
 
 import policy as pol
@@ -31,8 +33,52 @@ MIN_AREA = 40_000        # px: a colour mask smaller than this at a WP2 pose is 
 AUTO_LIFT = {"wp2-1": 22.0, "wp2-3": 12.0}    # mm, see AutoCollect.photos
 # green: its feed_lift.json entry (+28 mm at wp2-1) was tuned for the hand-fed end grip; picked off the plate, +50 mm
 # in total pushed it out of the TOP of the frame at wp2-1 (2026-11-15, 4 of 4 handlings)
-AUTO_LIFT_BRICK = {"green": {"wp2-1": -6.0, "wp2-3": 12.0}}
+AUTO_LIFT_BRICK = {"green": {"wp2-1": -6.0, "wp2-3": 0.0}}    # wp2-3: +12 cut a stud-up green block at the top twice
+# Inspection only: a 4th photo with the fingers pointing straight down, so the front camera (which sits higher) looks
+# onto the block's TOP face, the one between the jaws that wp2-1..3 only show edge-on (2026-11-15: tape on the stud
+# face of a pink block was missed twice). Model elevation -51 deg = straight down on the real arm (the taught pose
+# this starts from, 2026-11-14 21:59, kept in routines.json as wp2-3's "replaced"); its grasp point is raised by up_mm so
+# the hanging block is in the frame (at the taught height the frame's bottom edge cut it).
+TOP_VIEW = {"name": "wp2-top", "elev_deg": -41.0, "up_mm": 40.0}    # from the hand-taught straight-down pose (wp2-3 "replaced");
+                                                                    # -51 deg is only reachable up to +20 mm
+# Top-camera check before the pick (2026-11-15): the face that points UP while the block lies on the plate ends up
+# against the gripper and is never shown to the front camera. Limit per brick = largest patch on / next to the brick
+# that is neither its colour, nor the plate's orange, nor another brick, as a share of the brick's area. Pink only so
+# far: 73 clean pink views <= 0.066, two taped ones 0.13 and 0.16. For blue and green the same measure reads 0.07-0.4
+# on CLEAN blocks (their shaded faces change hue), so it is off until tuned.
+TOP_FOREIGN_MAX = {"pink": 0.10}
 MAX_FAILS = 3            # failed picks in a row / handlings without a usable mask in a row -> stop and ask
+
+
+def _hdist(H, h0):
+    d = np.abs(H - h0); return np.minimum(d, 180 - d)
+
+
+def top_foreign(img, brick, others, plate, grow=1.25, up=4):
+    """Tape seen by the TOP camera on a brick lying on the plate. img = raw top frame; brick / others = entries of
+    vpick.detect (box = 4 corners in full-frame px, size = (long, short) px); plate = (cx, cy, r) or None.
+    -> largest foreign patch as a share of the brick's area, or None if the brick's colour can't be read."""
+    box = np.asarray(brick["box"], np.float32); c = box.mean(0); pts = c + (box - c) * grow
+    x0, y0 = np.floor(pts.min(0)).astype(int) - 2; x1, y1 = np.ceil(pts.max(0)).astype(int) + 2
+    x0, y0 = max(0, x0), max(0, y0)
+    crop = cv2.resize(img[y0:y1, x0:x1], None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+    P = lambda q: ((np.asarray(q, np.float32) - [x0, y0]) * up).astype(np.int32)
+    m = np.zeros(crop.shape[:2], np.uint8); cv2.fillConvexPoly(m, P(pts), 255)
+    for o in others:                                      # a neighbouring brick is not tape
+        ob = np.asarray(o["box"], np.float32); oc = ob.mean(0); cv2.fillConvexPoly(m, P(oc + (ob - oc) * 1.12), 0)
+    if plate is not None:                                 # stay on the plate (the table is not saturated)
+        pm = np.zeros_like(m); cv2.circle(pm, (int((plate[0] - x0) * up), int((plate[1] - y0) * up)), int(plate[2] * 0.93 * up), 255, -1)
+        m &= pm
+    inner = np.zeros_like(m); cv2.fillConvexPoly(inner, P(c + (box - c) * 0.7), 255)
+    m = m > 0; hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).astype(int); H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    sat = (inner > 0) & m & (S >= 110) & (V >= 60)
+    if sat.sum() < 40: return None
+    hd = int(np.median(H[sat]))                           # the brick's own hue; the plate's orange is hue ~10
+    f = m & (((S < 70) & (V > 75) & (V < 235)) | ((S >= 70) & (V > 55) & (_hdist(H, hd) > 18) & (_hdist(H, 10) > 10)))
+    el = lambda n: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
+    f = cv2.morphologyEx(cv2.morphologyEx(f.astype(np.uint8), cv2.MORPH_OPEN, el(2 * up + 1)), cv2.MORPH_CLOSE, el(4 * up + 1))
+    n, _, st, _ = cv2.connectedComponentsWithStats(f)
+    return float(st[1:, 4].max()) / (float(brick["size"][0] * brick["size"][1]) * up * up) if n > 1 else 0.0
 
 
 class AutoCollect:
@@ -77,6 +123,21 @@ class AutoCollect:
         except Exception:
             return None
 
+    def top_pose(self, wp21):
+        """Joint ticks of the top-face view (TOP_VIEW), solved once from the hand-taught straight-down pose. Raises if
+        out of reach."""
+        key = tuple(sorted(wp21.items()))
+        if getattr(self, "_top", (None,))[0] != key:
+            import vpick
+            if self.F.kin is None: self.F.kin = vpick.Kin()
+            kin = self.F.kin; p = kin.fk(kin.rad(wp21))[0].copy(); p[2] += TOP_VIEW["up_mm"] / 1000.0
+            t, err = kin.pose_at(wp21, p, TOP_VIEW["elev_deg"])
+            if err > 0.004: raise RuntimeError(f"top-view pose out of reach ({err * 1000:.0f} mm off)")
+            for n, (lo, hi) in self.A.fl.items():
+                if n in t and n != "gripper" and not lo + 20 <= t[n] <= hi - 20: raise RuntimeError(f"top-view pose: {n} at its limit")
+            self._top = (key, t)
+        return dict(self._top[1])
+
     def photos(self, brick, g_lock, wp1, idx, run_id, label="good"):
         """WP1 -> WP2, one masked photo per WP2 pose, back up over WP2 and to WP1. -> list of photo records."""
         T, C, F = self.T, self.C, self.F
@@ -113,14 +174,32 @@ class AutoCollect:
             elif why is None: why = "mask too small: no block in the jaws"
             out.append({"view": w["name"], "file": rec.get("file"), "mask_ok": bool(dep), "area_px": area, "ok": ok, "why": why})
             F._grab_last(rec)
-            if not ok and rec.get("file"):               # nothing (or not this brick) in the jaws: not a training photo
+            if not ok and rec.get("file") and label == "good":   # nothing (or not this brick) in the jaws: not a training photo
                 stem = (self.DATA / rec["file"]).with_suffix("")
                 for f in stem.parent.glob(stem.name + "*"):
                     try: f.unlink()
                     except OSError: pass
                 out[-1]["deleted"] = True
+        if label != "good":                              # inspection: also look at the top face
+            try:
+                seed = next((w["replaced"]["pos"] for w in taught if isinstance(w.get("replaced"), dict) and w["name"] == "wp2-3"), None)
+                if seed is None: raise RuntimeError("no hand-taught straight-down pose (wp2-3 'replaced') in the routine")
+                top = self.top_pose(seed)
+                C.goto(wp2[0]["pos"], C.cfg["speed"] * 0.4, gripper=g_lock)
+                C.goto(top, C.cfg["speed"] * 0.4, gripper=g_lock)
+                T.state = "photo"; T.say(f"cycle {idx}: {brick} photo of the top face ({TOP_VIEW['name']})")
+                F.settle(); T.check(); prep.configure_inhand(brick=brick)
+                nf = self.ctx.capture(["front"], label, brick, TOP_VIEW["name"], idx, run_id)
+                rec = next((m for m in reversed(F._last_meta(3)) if m.get("cam") == "front"), {}) if nf else {}
+                dep = rec.get("depth") if isinstance(rec.get("depth"), dict) else {}
+                out.append({"view": TOP_VIEW["name"], "file": rec.get("file"), "mask_ok": bool(dep), "area_px": dep.get("area_px"),
+                            "ok": bool(nf) and bool(dep), "extra": True, "why": rec.get("depth_mask_why") if nf else "no fresh front frame"})
+                F._grab_last(rec)
+            except Stopped: raise
+            except Exception as e:
+                out.append({"view": TOP_VIEW["name"], "file": None, "mask_ok": False, "ok": False, "extra": True, "why": f"top view not taken: {e}"})
         T.state = "returning"
-        if len(wp2) > 1: C.goto(wp2[0]["pos"], C.cfg["speed"] * 0.4, gripper=g_lock)      # leave the way it came in
+        if len(wp2) > 1 or label != "good": C.goto(wp2[0]["pos"], C.cfg["speed"] * 0.4, gripper=g_lock)      # leave the way it came in
         C.up_wp2(wp1, wp2, g_lock)
         C.goto(wp1, gripper=g_lock)
         return out
@@ -229,19 +308,61 @@ class AutoCollect:
             t_low, t_high = th.get("t_low"), th.get("t_high")
             if t_low is None or t_high is None: raise RuntimeError(f"no thresholds.json for the {colour} model")
             home = C.wps("home")[0]["pos"]; wp1 = C.wps("wp1")[0]["pos"]; g_open = T.g_open()
-            T._vopt = {"target": colour, "retries": 1}
+            # 1) top camera, block still on the plate: its upward face (never shown to the front camera later)
+            top = {"view": "top camera", "extra": True, "ok": False, "foreign": None}
+            try:
+                vp, kin, cal = T.get_vision()
+                T.state = "look"; C.goto(home, gripper=g_open)
+                frame, bricks, plate = vp.VisionPick(A, C, self.S, kin, cal, check=T.check, say=T.say).look()
+                mine = [b for b in bricks if b["colour"] == colour]
+                if mine:
+                    fs = top_foreign(frame, mine[0], [b for b in bricks if b is not mine[0]], plate)
+                    cv2.imwrite(str(d / "top_raw.jpg"), frame)
+                    top.update(ok=fs is not None, foreign=None if fs is None else round(fs, 3), limit=TOP_FOREIGN_MAX.get(colour))
+            except Stopped: raise
+            except Exception as e: top["why"] = f"top-camera check failed: {e}"
+            T._vopt = {"target": colour, "retries": 3}        # the user's rule: a failed pick is tried again
             g_lock = T.pick_vision()
             brick = ((T.act.attempts or [{}])[-1]).get("brick") or colour
             ph = self.photos(brick, g_lock, wp1, 1, T.session, label="test")
             T.state = "judge"; T.say(f"scoring the {brick} photos")
+            reasons = []
+            lim = TOP_FOREIGN_MAX.get(brick)
+            if top["foreign"] is not None and lim is not None and top["foreign"] >= lim:
+                top["verdict"] = "anomalous"
+                reasons.append(f"top camera: a patch that is not {brick} covers {top['foreign']:.0%} of the block's upward face on the plate")
+            else: top["verdict"] = "clean" if (top["foreign"] is not None and lim is not None) else "not judged"
             for p in ph:
-                if not p["ok"] or not p.get("file"): p["verdict"] = "no usable photo"; continue
+                why = str(p.get("why") or "")
+                if p.get("extra"):                           # top-face view: no model for it, only the colour check counts
+                    fs = prep.foreign_share(cv2.imread(str(self.DATA / p["file"])), brick) if p.get("file") and p["ok"] else None
+                    p["foreign"] = None if fs is None else round(fs[0], 3)
+                    if fs is not None and fs[0] >= prep.FOREIGN_MAX:
+                        p["verdict"] = "anomalous"; reasons.append(f"{p['view']}: a patch that is not {brick} covers {fs[0]:.0%} of the block's top")
+                    else: p["verdict"] = "clean" if fs is not None else "not seen"
+                    continue
+                if "cut by" in why or not p.get("file"):
+                    p["verdict"] = "uncertain"; reasons.append(f"{p['view']}: {why or 'no photo'}"); continue
+                if not p["ok"]:
+                    # the pick was verified (the block left the plate) but its colour can't be seen at this pose:
+                    # something covers it (tape over the whole face) - or the jaws hide it. Either way not clean.
+                    p["verdict"] = "anomalous"; reasons.append(f"{p['view']}: the {brick} block is held but its colour is hidden (covered?)"); continue
                 f = self.DATA / p["file"]; crop = f.with_name(f.stem + "_crop.png")
+                fs = prep.foreign_share(cv2.imread(str(f)), brick)
+                p["foreign"] = None if fs is None else round(fs[0], 3)
                 r = T.scorer.score(model, crop, T.cfg["device"]); p["score"] = round(float(r["score"]), 3)
-                p["verdict"] = "anomalous" if p["score"] >= t_high else "clean" if p["score"] <= t_low else "uncertain"
-            sc = [p["score"] for p in ph if "score" in p]
-            verdict = ("NO USABLE PHOTO" if not sc else "ANOMALOUS" if max(sc) >= t_high else
-                       "CLEAN" if len(sc) == len(ph) and max(sc) <= t_low else "UNCERTAIN")
+                if p["foreign"] is not None and p["foreign"] >= prep.FOREIGN_MAX:
+                    p["verdict"] = "anomalous"; reasons.append(f"{p['view']}: a patch that is not {brick} covers {p['foreign']:.0%} of the block")
+                elif p["score"] >= t_high:
+                    # the user's rule (2026-11-15, after a clean pink block scored 0.89): never call a block anomalous
+                    # when nothing can be SEEN on it. A high model score alone is only a doubt.
+                    p["verdict"] = "uncertain"; reasons.append(f"{p['view']}: model score {p['score']:.2f} >= {t_high} but no visible patch")
+                elif p["score"] > t_low:
+                    p["verdict"] = "uncertain"; reasons.append(f"{p['view']}: model score {p['score']:.2f} between {t_low} and {t_high}")
+                else: p["verdict"] = "clean"
+            sc = [p["score"] for p in ph if "score" in p]; ph = [top] + ph; vs = [p["verdict"] for p in ph]
+            verdict = "ANOMALOUS" if "anomalous" in vs else "UNCERTAIN" if "uncertain" in vs else "CLEAN"
+            res["reasons"] = reasons
             res.update(brick=brick, verdict=verdict, t_low=t_low, t_high=t_high, max_score=max(sc) if sc else None, photos=ph)
             self.last_inspect = {**res, "running": True}
             for k in range(3):
@@ -249,7 +370,7 @@ class AutoCollect:
                 except pol.PickFailed as e:
                     if k == 2: raise RuntimeError(f"no reachable spot to set the block down: {e}")
                     C.goto(wp1, gripper=g_lock)
-            T.state = "done"; T.say(f"INSPECT {brick}: {verdict}" + (f" (highest score {max(sc):.2f}; clean <= {t_low}, anomalous >= {t_high})" if sc else ""),
+            T.state = "done"; T.say(f"INSPECT {brick}: {verdict}" + (f" · {'; '.join(reasons)}" if reasons else f" (highest score {max(sc):.2f}, clean <= {t_low})"),
                                     verdict == "CLEAN")
         except Stopped:
             res["error"] = "stopped"; T.state = "stopped"; T.say("STOPPED: arm holds its position", False)

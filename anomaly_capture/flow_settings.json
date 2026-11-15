@@ -1,0 +1,8 @@
+{
+ "accept": "sort_good",
+ "reject": "sort_defect",
+ "max_reclamps": 4,
+ "retakes": 1,
+ "uncertain_to": "reject",
+ "side_view": ""
+}

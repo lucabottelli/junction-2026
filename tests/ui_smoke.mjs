@@ -42,12 +42,12 @@ async function visit(path, shot) {
 }
 
 // ---- load: every page through a real navigation first
-where = '/';
-await page.goto(BASE + '/', { waitUntil: 'load' });
+where = '/dev';
+await page.goto(BASE + '/dev', { waitUntil: 'load' });
 await sleep(1500);
 const paths = await page.evaluate(() => PAGES.map(p => p.path));
 if (paths.length < 10) note('only ' + paths.length + ' pages found');
-const name = p => (p === '/' ? 'overview' : p.slice(1).replace(/\//g, '-'));
+const name = p => (p === '/dev' ? 'overview' : p.slice(1).replace(/\//g, '-'));
 for (const p of paths) {                     // deep links (fresh load of each URL)
   where = p + ' (load)';
   await page.goto(BASE + p, { waitUntil: 'load' });

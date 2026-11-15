@@ -47,7 +47,7 @@ const JS={shoulder_pan:'Pan',shoulder_lift:'Lift',elbow_flex:'Elbow',wrist_flex:
 // config inputs: [id, /sort/cfg key, kind]   (segments: pick, judge, release_cam)
 const CFG=[['so-tl','t_low'],['so-th','t_high'],['so-rt','retries'],['so-vd','view_deg'],['so-fd','finger_deg'],['so-mr','max_regrasps'],
  ['so-dev','device'],['so-fdev','fast_device'],['so-brick','brick'],['so-inc','allow_incomplete',1],['so-rel','release',1],['so-casc','cascade',1],
- ['so-amodel','act_model'],['so-adev','act_device'],['so-amode','act_mode'],['so-amax','act_max_s'],['so-aret','act_retries'],['so-aspd','act_speed'],['so-vsmooth','vision_smooth',1]];
+ ['so-amodel','act_model'],['so-adev','act_device'],['so-amode','act_mode'],['so-amax','act_max_s'],['so-aret','act_retries'],['so-aspd','act_speed'],['so-vsmooth','vision_smooth',1],['so-vfast','vision_fast',1]];
 
 let gotSort=false,faceSig='',photoSig='',roiSig='',plateSig='',brickSig='',polSig='',POL=null,polBusy=false;
 

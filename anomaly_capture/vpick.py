@@ -53,7 +53,7 @@ def plate_mask(img):
     return cv2.erode(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (e, e))), (float(cx), float(cy), float(r))
 
 
-def detect(img, roi=None, mm_per_px=None):
+def detect(img, roi=None, mm_per_px=None, at=None):
     """Bricks on the orange plate. img = top-camera frame (BGR); roi = (x0, y0, x1, y1) if img is that crop of the
     full frame, resized to img's size (the recorded episodes are). All pixel values returned are in FULL-frame
     pixels. -> (list of {"c": (u, v), "angle": deg of the long side in the image (0..180), "size": (long, short) px,
@@ -61,8 +61,12 @@ def detect(img, roi=None, mm_per_px=None):
     h, w = img.shape[:2]
     x0, y0, x1, y1 = roi or (0, 0, w, h)
     sx, sy = (x1 - x0) / w, (y1 - y0) / h              # full-frame px per image px
-    pm, plate = plate_mask(img)
-    if pm is None: return [], None
+    if at is not None:      # at = (u, v, radius px), full frame, needs mm_per_px: bricks in that circle wherever it is
+        pm = np.zeros((h, w), np.uint8); cv2.circle(pm, (int(round(at[0])), int(round(at[1]))), int(round(at[2])), 255, -1)
+        plate = (float(at[0]), float(at[1]), float(at[2]))      # (the re-clamp spot on the table; wood and tape have the plate's hue)
+    else:
+        pm, plate = plate_mask(img)
+        if pm is None: return [], None
     hsv = cv2.cvtColor(cv2.GaussianBlur(img, (5, 5), 0), cv2.COLOR_BGR2HSV)
     H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     fg = (pm > 0) & (S >= MIN_SAT) & (V >= MIN_VAL) & ~((H >= PLATE_HUE[0]) & (H <= PLATE_HUE[1]))
@@ -71,6 +75,7 @@ def detect(img, roi=None, mm_per_px=None):
     out = []
     for name, (lo, hi) in list(COLOURS.items()) + [("other", (None, None))]:
         if lo is None:
+            if at is not None: continue
             m = fg & ~np.any([(H >= a) & (H <= b) for a, b in COLOURS.values()], axis=0)
         else:
             m = fg & (H >= lo) & (H <= hi)
@@ -224,6 +229,10 @@ class Calib:
     def xy(self, u, v):
         p = self.H @ np.array([u, v, 1.0]); return p[:2] / p[2]
 
+    def px(self, x, y):
+        """Model (x, y) on the plate plane -> pixel (u, v) of the full top frame."""
+        p = np.linalg.inv(self.H) @ np.array([x, y, 1.0]); return float(p[0] / p[2]), float(p[1] / p[2])
+
     def xyz(self, u, v):
         x, y = self.xy(u, v); return np.array([x, y, self.z[0] + self.z[1] * x + self.z[2] * y])
 
@@ -262,6 +271,7 @@ YAW_BIAS_DEG = -11.5     # FK jaw yaw minus the brick axis in 99 human grasps (m
 Z_SEEK = 0.012           # how far below the calibrated grasp height the descent may go looking for the plate (contact stops it)
 EMPTY_TICKS = 25         # fingers stopped fewer ticks than this above the closed end: nothing between them
 HELD_TICKS = 25          # fingers at least this far short of the squeeze command at waypoint 1: still holding
+SURE_TICKS = 40      # this far short of the squeeze command at WP1 = held for sure, whatever the top camera sees
 RIM_SLACK = 0.02         # m a finger may stand outside the plate's flat part before a grasp counts as blocked
 MISS_PX, MISS_S = 45.0, 180.0     # a brick still within this many px of where a pick just failed (in the last MISS_S s) is
 LAST_MISS = {}                    # dragged to the plate's middle before the next try: {"px": (u, v), "t": time, "colour": name}
@@ -275,11 +285,13 @@ NEUTRAL = {"dz_mm": 0.0,             # grasp height offset
            "approach_speed": 1.0}    # multiplier on the descent speed
 
 
-def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
+def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None, both=False):
     """Every way to grasp every brick, best first. Bricks are ordered nearest to the robot first (the user's rule);
     within a brick, the jaw direction with the most room to the neighbours and the plate rim wins.
     -> list of {"i": brick index, "xyz": TCP target, "yaw": jaw yaw (fixed -> moving jaw), "q": joints rad,
-    "open": gripper ticks, "width": m, "clear": m, "dist": m from the robot base}"""
+    "open": gripper ticks, "width": m, "clear": m, "dist": m from the robot base}
+    both=True (re-clamp, sorter.regrip_vision): a brick that is not square is also offered across its LONG side
+    (a 2x3 is 48 mm that way), so a grasp turned 90 deg exists for every brick."""
     W = []
     for b in bricks:
         u, v = b["c"]; mm = calib.mm_per_px(u, v) / 1000.0
@@ -289,10 +301,12 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
     pr = (plate[2] * calib.mm_per_px(*plate[:2]) / 1000.0 * 0.80) if plate else None      # flat part of the dish
     out = []
     for i, w in enumerate(W):
-        opts = [(w["th"] + math.pi / 2, w["short"])]
-        if w["long"] / max(1e-6, w["short"]) < SQUARE: opts.append((w["th"], w["long"]))
-        for yaw0, width in opts:
-            width = min(width, 0.040) if width < MAX_GRASP_W else width      # side faces inflate the blob a little
+        square = w["long"] / max(1e-6, w["short"]) < SQUARE
+        opts = [(w["th"] + math.pi / 2, w["short"], False)]
+        if square or both: opts.append((w["th"], w["long"], not square))
+        for yaw0, width, long_side in opts:
+            if long_side: width = min(width, MAX_GRASP_W - 0.002)            # across the long side of a 2x3: its real length
+            else: width = min(width, 0.040) if width < MAX_GRASP_W else width      # side faces inflate the blob a little
             if width > MAX_GRASP_W: continue
             for flip in (0.0, math.pi):
                 yaw = yaw0 + flip; x = np.array([math.cos(yaw), math.sin(yaw)])
@@ -328,12 +342,13 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
 class VisionPick:
     """One pick with retries, same contract as policy.ActPick: run() -> (clamp command g_lock, info) or raises
     PickFailed / Stopped. A = arm.Arm, C = collect.Collector, S = capture state (frames, frame_t)."""
-    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None, smooth=False,
-                 on_event=None, tuner=None):
+    def __init__(self, A, C, S, kin, calib, retries=2, speed=1.0, check=None, say=None, debug_dir=None, target=None, smooth=False, fast=False,
+                 on_event=None, tuner=None, force=None):
         import policy as pol
         self.pol = pol
         self.A, self.C, self.S, self.kin, self.calib = A, C, S, kin, calib
         self.retries, self.speed = int(retries), float(speed)
+        self.fast = bool(fast)        # fast: 3 descent steps instead of 6, quicker travel to the hover and up to WP1
         self.smooth = bool(smooth)       # one continuous descent instead of six corrected steps (see attempt, step 2)
         self.check = check or (lambda: None); self.say = say or (lambda m, ok=True: None)
         self.debug_dir = Path(debug_dir) if debug_dir else None
@@ -343,6 +358,10 @@ class VisionPick:
         self.tuner = tuner; self.tune = dict(NEUTRAL)             # grasp_tuner.Tuner (optional): suggest(colour)
         self.attempts = []; self.grasp_pose = None; self.live = {}; self.tried = set(); self.g_lock = None; self.z_rel = 0.0
         self.plate = None; self.seen = []
+        # re-clamp (sorter.regrip_vision): {"px": (u, v) where the brick was set down, "yaw": model jaw yaw (rad, mod
+        # 360) the grasp must have, "max_px": how far from px the brick may lie, "tol_deg": allowed yaw difference}
+        self.force = force
+        self._spot_off = None    # px: where the brick is seen on the re-clamp spot minus where the calibration puts the release pose
 
     # ---- small helpers
     def _check(self):
@@ -362,7 +381,7 @@ class VisionPick:
         past the target by what is still missing. -> the offsets (ticks) that hold the arm there."""
         tgt = self.kin.ticks(q5, gripper); off = {n: 0.0 for n in self.pol.BODY}
         for _ in range(iters):
-            self._goto(q5, gripper, 0.35, off); time.sleep(0.2)
+            self._goto(q5, gripper, 0.35, off); time.sleep(0.12 if self.fast else 0.2)
             err = {n: tgt[n] - self.A.pos[n] for n in self.pol.BODY}
             if max(abs(e) for e in err.values()) <= tol: break
             for n in off: off[n] += max(-80.0, min(80.0, err[n]))
@@ -447,6 +466,9 @@ class VisionPick:
         gmin = A.fl["gripper"][0]
         f, bricks, plate = self.look()
         every = bricks
+        fo = self.force; spot = fo.get("at") if fo else None
+        if spot:                                 # the brick lies off the plate, on the re-clamp spot: look there
+            bricks = detect(f, mm_per_px=self.calib.mm_per_px(spot[0], spot[1]), at=spot)[0]
         if self.target == "random":
             if self.colour is None:
                 seen = sorted({b["colour"] for b in bricks if b["colour"] in COLOURS})
@@ -454,17 +476,46 @@ class VisionPick:
             want = self.colour
         else: want = self.target
         if want: bricks = [b for b in bricks if b["colour"] == want]
-        if want and not bricks: raise self.pol.PickFailed(f"no {want} brick found on the orange plate", retry=False)
-        if not bricks: raise self.pol.PickFailed("no brick found on the orange plate", retry=False)
+        where = "the re-clamp spot" if spot else "the orange plate"
+        if want and not bricks: raise self.pol.PickFailed(f"no {want} brick found on {where}", retry=False)
+        if not bricks: raise self.pol.PickFailed(f"no brick found on {where}", retry=False)
         wp1 = kin.rad(C.wps("wp1")[0]["pos"])
-        plans = plan_grasps(bricks, self.calib, kin, wp1, A.fl["wrist_roll"], plate)
+        if fo:                                   # only the brick that was just set down, only a grasp turned 90 deg
+            near = min(bricks, key=lambda x: math.hypot(x["c"][0] - fo["px"][0], x["c"][1] - fo["px"][1]))
+            off_px = math.hypot(near["c"][0] - fo["px"][0], near["c"][1] - fo["px"][1])
+            if off_px > fo.get("max_px", 130):
+                raise self.pol.PickFailed(f"the {near['colour']} brick is not where it was set down ({off_px:.0f} px away)", retry=False)
+            bricks = [near]
+        plan_b = bricks
+        if spot:
+            # The calibration is fitted on the plate; at the re-clamp spot it was ~37 mm off (07:42: the jaws closed
+            # beside the brick twice). So the arm goes by its own release pose: the brick seen right after the release
+            # IS where the jaws let go (fo["rel_xy"]); that pixel difference corrects this and every later look.
+            if fo.get("rel_xy") is not None and self._spot_off is None:
+                cp = self.calib.px(fo["rel_xy"][0], fo["rel_xy"][1])
+                self._spot_off = (near["c"][0] - cp[0], near["c"][1] - cp[1])
+            d_ = self._spot_off or fo.get("off_px") or (0.0, 0.0)
+            plan_b = [{**near, "c": (near["c"][0] - d_[0], near["c"][1] - d_[1])}]
+        plans = plan_grasps(plan_b, self.calib, kin, wp1, A.fl["wrist_roll"], None if spot else plate, both=bool(fo))
+        turn = lambda x: (0.0, 0)
+        if fo and fo.get("yaw") is not None:
+            # fo["yaw"] = jaw yaw at the release. The new grasp must be turned 90 deg from it, +90 if that is in reach,
+            # else -90 (the user's rule, 2026-11-15 07:40); which one it was is reported (info["forced"]["turn_deg"]).
+            wrap = lambda a_: abs((a_ + math.pi) % (2 * math.pi) - math.pi)
+            turn = lambda x: min((wrap(x["yaw"] - fo["yaw"] - s_ * math.pi / 2), -s_) for s_ in (1, -1))
+            n_all = len(plans)
+            plans = sorted([x for x in plans if turn(x)[0] <= math.radians(fo.get("tol_deg", 30))], key=lambda x: (turn(x)[1], turn(x)[0]))
+            if n_all and not plans:              # the brick turned when it was let go: which faces were gripped is not known
+                devs = sorted(round(math.degrees(turn(x)[0])) for x in plan_grasps(plan_b, self.calib, kin, wp1, A.fl["wrist_roll"], None, both=True))
+                raise self.pol.PickFailed(f"the brick does not lie as it was set down (nearest grasp is {devs[0] if devs else '?'}° from a 90° turn, "
+                                          f"limit {fo.get('tol_deg', 30)}°)", retry=False)
         if not plans:
             self._save(f"{tag}look.jpg", draw(f, bricks, plate)); return "unreachable", {"bricks": len(bricks)}
         key = lambda x: (round(x["centre"][0] / 0.01), round(x["centre"][1] / 0.01), round(math.degrees(x["yaw"]) / 20) % 9)
         g = next((x for x in plans if key(x) not in self.tried), plans[0])    # a retry takes another jaw direction / brick
         self.tried.add(key(g))
         b = bricks[g["i"]]
-        if plate is not None and not getattr(self, "_dragged", False):   # on the rim: one drag to the middle, then a fresh look
+        if plate is not None and not fo and not getattr(self, "_dragged", False):   # on the rim: one drag to the middle, then a fresh look
             lm = LAST_MISS                                                 # the last pick failed on this very brick
             if lm and time.time() - lm["t"] < MISS_S and lm["colour"] == b["colour"] \
                     and math.hypot(b["c"][0] - lm["px"][0], b["c"][1] - lm["px"][1]) < MISS_PX:
@@ -474,10 +525,16 @@ class VisionPick:
                     return self.attempt(k, tag)
         self.plate = plate; self.seen = [x["c"] for x in every if x is not b]      # for setting it down again
         self._save(f"{tag}look.jpg", draw(f, bricks, plate, pick=g["i"]))
-        info = {"brick": b["colour"], "px": [round(v, 1) for v in b["c"]], "angle": round(b["angle"], 1), "xyz": [round(v, 4) for v in g["xyz"]],
+        mm_b = self.calib.mm_per_px(b["c"][0], b["c"][1])
+        info = {"brick": b["colour"], "px": [round(v, 1) for v in b["c"]], "angle": round(b["angle"], 1),
+                "size_mm": [round(b["size"][0] * mm_b, 1), round(b["size"][1] * mm_b, 1)], "xyz": [round(v, 4) for v in g["xyz"]],
                 "yaw": g["yaw"], "width_mm": round(g["width"] * 1000, 1), "clear_mm": round(g["clear"] * 1000, 1),
                 "n_bricks": len(bricks), "tilt_deg": round(math.degrees(g["tilt"]), 1), "rim_mm": round(g.get("rim", 1.0) * 1000, 1),
                 "dragged": bool(getattr(self, "_dragged", False))}
+        if fo: info["forced"] = {"release_yaw_deg": None if fo.get("yaw") is None else round(math.degrees(fo["yaw"]), 1), "turn_deg": -90 * turn(g)[1],
+                                 "yaw_err_deg": round(math.degrees(turn(g)[0]), 1), "moved_px": round(off_px, 1),
+                                 "set_down_px": [round(float(v), 1) for v in fo["px"]], "spot": bool(spot),
+                                 "spot_off_px": None if not spot else [round(float(v), 1) for v in d_]}
         self.live = {"attempt": k + 1, "brick": b["colour"], "bricks": len(bricks)}
         self.say(f"vision pick {k + 1}/{self.retries + 1}: {b['colour']} brick, {len(bricks)} on the plate")
         if self.tuner is not None:
@@ -492,7 +549,7 @@ class VisionPick:
         self.on_event("start", info)
         # 1. above the brick, jaws open; measured joints servoed onto the IK pose
         q_hover, err = kin.ik.solve(np.array(g["q"]), p + [0, 0, HOVER], yaw, iters=60)
-        self._goto(q_hover, g_open, 1.0)
+        self._goto(q_hover, g_open, 1.8 if self.fast else 1.0)
         off = self._servo_in(q_hover, g_open)
         self._settle()
         z0 = kin.fk(self._q_now())[0][2] - (p[2] + HOVER)              # what "on target" reads at the hover
@@ -500,8 +557,8 @@ class VisionPick:
         info["hover_err_mm"] = [round(v * 1000, 1) for v in (kin.fk(self._q_now())[0] - (p + [0, 0, HOVER]))]
         info["off_ticks"] = {n: round(v) for n, v in off.items()}
         # 2. straight down in steps; stop early if the fingers stand on something (measured height stops following)
-        q = q_hover; n = 6; touched = None; z_low = p[2] - Z_SEEK; steps = []; info["dz_steps_mm"] = steps
-        info["smooth"] = self.smooth
+        q = q_hover; n = 3 if self.fast else 6; touched = None; z_low = p[2] - Z_SEEK; steps = []; info["dz_steps_mm"] = steps
+        info["smooth"] = self.smooth; info["fast"] = self.fast
         if self.smooth:
             # Smooth: one move from the hover to the grasp depth, then one sag correction without stopping in between.
             # No stepwise sag correction and no contact stop on the way, so the depth can be a few mm less exact.
@@ -520,6 +577,16 @@ class VisionPick:
             self._goto(q, g_open, 0.3, off); self._settle(0.5)
             dz = kin.fk(self._q_now())[0][2] - z; steps.append(round(dz * 1000, 1))
             if dz > 0.005: touched = (z, dz); break                      # still held up after the correction: contact
+        if fo and fo.get("seek") and touched is None and not self.smooth:
+            # the re-clamp spot is on the table, lower than the plate the heights are calibrated for: go on down in
+            # small steps until the fingers stand on the table (same contact test)
+            z = z_low
+            while z > z_low - fo["seek"] + 1e-6:
+                z -= 0.004
+                q, _ = kin.ik.solve(q, np.array([p[0], p[1], z]), yaw, iters=30)
+                self._goto(q, g_open, 0.3, off); self._settle(0.4)
+                dz = kin.fk(self._q_now())[0][2] - z; steps.append(round(dz * 1000, 1))
+                if dz > 0.005: touched = (z, dz); break
         info["touch_mm"] = None if touched is None else [round((touched[0] - p[2]) * 1000, 1), round(touched[1] * 1000, 1)]
         self._snap(f"{tag}low")
         if touched and touched[0] - p[2] > 0.014:                        # stopped high: standing on the brick
@@ -532,7 +599,7 @@ class VisionPick:
         info["tcp"] = [round(float(v), 4) for v in tcp]; self.z_rel = float(tcp[2] - p[2])   # height it is held at
         # 3. close until the fingers stall, then squeeze a little past that width
         self.grasp_pose = dict(A.cmd)
-        C.goto(dict(A.cmd), 0.3, gripper=gmin); time.sleep(0.15)
+        C.goto(dict(A.cmd), 0.5 if self.fast else 0.3, gripper=gmin); time.sleep(0.15)
         g_stall = A.pos["gripper"]; info["g_stall"] = round(g_stall)
         # Shut on nothing = the fingers reached the command (reads gmin + ~6). Held = they stopped short of it:
         # a 2x2 clamped by this pick stalls only ~52 ticks above gmin (1927), so the old "< 120" threw good grasps away.
@@ -547,8 +614,9 @@ class VisionPick:
         # 4. up, to waypoint 1, still held?
         wp1t = C.wps("wp1")[0]["pos"]
         info["g_squeezed"] = round(A.pos["gripper"])
-        C.rise(wp1t); info["g_risen"] = round(A.pos["gripper"]); self._snap(f"{tag}risen")
-        C.goto(wp1t, gripper=g_lock); time.sleep(0.3); info["g_wp1"] = round(A.pos["gripper"])
+        C.rise(wp1t)                                 # same lift in fast mode: 0.55 was tried 11-15 08:09 and saved no time
+        info["g_risen"] = round(A.pos["gripper"]); self._snap(f"{tag}risen")
+        C.goto(wp1t, 0.8 if self.fast else None, gripper=g_lock); time.sleep(0.3); info["g_wp1"] = round(A.pos["gripper"])
         info["g_lock"] = round(g_lock)
         # Held = the fingers still stand short of the squeeze command. An absolute width fails here: a 2x2 reads
         # 1872-1899 ticks depending on how it sits in the jaws, while empty jaws run on to the command / touch each other.
@@ -557,20 +625,109 @@ class VisionPick:
         # (two empty "holds" on 11-15 03:40/03:44). At WP1 the arm is clear of the plate, so look: if a brick of the
         # picked colour still lies on the plate, the gripper is empty.
         try:
-            _, left, _ = self.look()
+            fr, left, _ = self.look()
+            if spot: left = detect(fr, mm_per_px=self.calib.mm_per_px(spot[0], spot[1]), at=spot)[0]     # still on the re-clamp spot?
             info["seen_after"] = sorted({x["colour"] for x in left})
-            if b["colour"] in COLOURS and any(x["colour"] == b["colour"] for x in left): return "dropped", info
+            info["seen_after_px"] = [[x["colour"], round(float(x["c"][0])), round(float(x["c"][1]))] for x in left]
+            # The camera only decides when the ticks are ambiguous. With the jaws standing SURE_TICKS short of the
+            # squeeze command the brick is in them, and the top camera then sometimes sees that held brick at WP1 and
+            # calls it "still on the plate" (3 good grasps thrown away on 11-15 07:10-07:18, margins 51-54 ticks;
+            # the empty jams of 03:40/03:44 had margins under 30).
+            sure = A.pos["gripper"] - g_lock >= SURE_TICKS
+            if not sure and b["colour"] in COLOURS and any(x["colour"] == b["colour"] for x in left): return "dropped", info
         except self.pol.PickFailed: pass
         self.g_lock = g_lock
         return "held", info
 
-    def place(self, u, v, yaw, g_lock):
+    def grasp_world(self, centre, z, yaw, width, tag="rg_", seek=0.004, turn=0.0):
+        """Grip a brick whose place is known from the ARM'S OWN POSE, not from the camera (re-clamp on the tape spot,
+        sorter.regrip_vision): centre = brick centre (model x, y), z = TCP height it was let go at, yaw = MODEL jaw
+        yaw wanted (fixed -> moving jaw), width = brick size along the jaws (m). Same hover, stepwise descent with
+        sag correction, contact stop and close-until-stall as attempt(). Ends lifted back to the hover height.
+        -> ("held" | "empty" | "landed" | "dropped" | "unreachable", info); the clamp command is self.g_lock."""
+        A, C, kin = self.A, self.C, self.kin; gmin, gmax = A.fl["gripper"]; lo, hi = A.fl["wrist_roll"]
+        wrap = lambda a_: abs((a_ + math.pi) % (2 * math.pi) - math.pi)
+        ax = yaw - math.radians(self.calib.d.get("yaw_bias_deg", YAW_BIAS_DEG))        # where the jaws really point
+        x = np.array([math.cos(ax), math.sin(ax), 0.0])
+        p = np.array([centre[0], centre[1], z], np.float64) - (FIX_CLEAR + max(0.0, width - REF_W) / 2) * x
+        info = {"xyz": [round(float(v), 4) for v in p], "yaw_deg": round(math.degrees(yaw), 1), "width_mm": round(width * 1000, 1)}
+        # turn = how far the jaws turn from where they are (rad): the IK is also started with the wrist roll already
+        # turned that way round or the other, since a 180 deg turn has two solutions and only one is inside the limits
+        q0 = np.array(self._q_now()[:5], np.float64); ok = False
+        for dr in (0.0, turn, -turn):
+            qs = q0.copy(); qs[4] += dr
+            q_hover, e1 = kin.ik.solve(qs, p + [0, 0, HOVER], yaw, iters=80)
+            q_low, e2 = kin.ik.solve(np.array(q_hover).copy(), p, yaw, iters=60)
+            _, got, _ = kin.fk(q_hover); roll = kin.ticks(q_hover, 0)["wrist_roll"]
+            if max(e1, e2) <= 0.004 and wrap(got - yaw) <= math.radians(12) and lo + 30 <= roll <= hi - 30: ok = True; break
+            if not turn: break
+        if not ok:
+            info["why"] = f"err {max(e1, e2) * 1000:.1f} mm, yaw off {math.degrees(wrap(got - yaw)):.0f} deg, roll {roll:.0f}"
+            return "unreachable", info
+        g_open = min(gmax, max(TICKS_SHUT + TICKS_PER_M * (width + FIX_CLEAR + MOV_CLEAR), gmin + 200))
+        self._goto(q_hover, g_open, 1.0); off = self._servo_in(q_hover, g_open); self._settle()
+        self._snap(f"{tag}hover")
+        q = q_hover; n = 6; touched = None; z_low = p[2] - seek; steps = []; info["dz_steps_mm"] = steps
+        for s in range(1, n + 1):
+            zz = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
+            q, _ = kin.ik.solve(q, np.array([p[0], p[1], zz]), yaw, iters=30)
+            self._goto(q, g_open, 0.45, off); self._settle(0.5)
+            tgt = kin.ticks(q, g_open)
+            for n_ in off: off[n_] += max(-40.0, min(40.0, tgt[n_] - A.pos[n_]))
+            self._goto(q, g_open, 0.3, off); self._settle(0.5)
+            dz = kin.fk(self._q_now())[0][2] - zz; steps.append(round(dz * 1000, 1))
+            if dz > 0.005: touched = (zz, dz); break
+        info["touch_mm"] = None if touched is None else [round((touched[0] - p[2]) * 1000, 1), round(touched[1] * 1000, 1)]
+        self._snap(f"{tag}low")
+        if touched and touched[0] - p[2] > 0.014:                        # stopped high: standing on the brick
+            self._goto(q_hover, g_open, 0.5, off); return "landed", info
+        if touched:
+            q, _ = kin.ik.solve(q, np.array([p[0], p[1], touched[0] + touched[1] + 0.002]), yaw, iters=30)
+            self._goto(q, g_open, 0.3, off)
+        tcp = kin.fk(self._q_now())[0]; info["tcp_err_mm"] = [round(v * 1000, 1) for v in (tcp - p)]
+        C.goto(dict(A.cmd), 0.3, gripper=gmin); time.sleep(0.15)
+        g_stall = A.pos["gripper"]; info["g_stall"] = round(g_stall)
+        if g_stall - gmin < EMPTY_TICKS:
+            self._snap(f"{tag}shut")
+            C.goto(dict(A.cmd), 0.5, gripper=g_open); self._goto(q_hover, g_open, 0.5, off); return "empty", info
+        from collect import REGRIP_SQUEEZE
+        g_lock = max(getattr(A, "g_floor", None) or gmin, g_stall - REGRIP_SQUEEZE)
+        C.goto(dict(A.cmd), 0.5, gripper=g_lock); time.sleep(0.15)
+        self._goto(q_hover, g_lock, 0.4, off); time.sleep(0.25)         # straight up
+        info["g_lock"] = round(g_lock); info["g_risen"] = round(A.pos["gripper"]); self._snap(f"{tag}risen")
+        if A.pos["gripper"] - g_lock < HELD_TICKS: return "dropped", info
+        self.g_lock = g_lock
+        return "held", info
+
+    def turn_yaw(self, u, v, margin=150, dz=0.0):
+        """Jaw yaw for setting the held brick down at pixel (u, v) such that gripping it again there TURNED 90 DEG
+        (+90 or -90) is in reach (re-clamp, sorter.regrip_vision). Checks what place() and the forced pick will
+        solve: position error, jaw direction and the wrist-roll limits (with `margin` ticks to spare) for both.
+        dz: the spot's height relative to the plate plane (m). -> (yaw to pass to place(), roll room in ticks) or None."""
+        kin, A, C = self.kin, self.A, self.C
+        seed = kin.rad(C.wps("wp1")[0]["pos"]); lo, hi = A.fl["wrist_roll"]; best = None
+        p = self.calib.xyz(u, v); p[2] += self.z_rel + 0.003 + dz
+        for k in range(8):
+            yaw = -math.pi / 2 + k * math.pi / 8
+            q, err, tilt, used, dyaw = kin.solve(seed, p, yaw)
+            r1 = kin.ticks(q, 0)["wrist_roll"]
+            if err > 0.004 or dyaw > math.radians(10) or not lo + 30 <= r1 <= hi - 30: continue
+            for s_ in (1, -1):
+                want = used + s_ * math.pi / 2
+                q2, e2 = kin.ik.solve(np.asarray(seed, np.float64)[:5].copy(), np.asarray(p, np.float64), want, iters=80)
+                _, got, _ = kin.fk(q2); r2 = kin.ticks(q2, 0)["wrist_roll"]
+                room = min(r2 - lo, hi - r2, r1 - lo, hi - r1)
+                if e2 > 0.004 or abs((got - want + math.pi) % (2 * math.pi) - math.pi) > math.radians(12) or room < margin: continue
+                if best is None or room > best[1]: best = (yaw, float(room))
+        return best
+
+    def place(self, u, v, yaw, g_lock, dz=0.0, careful=False):
         """Set the held brick down so the grasp point is at pixel (u, v) of the top frame, jaws along yaw (either
         flip), let go and come straight up. -> {"xyz", "yaw"} = FK of the MEASURED joints at the release: with the
         brick's pixel in the next look this is one exact calibration pair (same IK, same sag handling as a pick)."""
         A, C, kin = self.A, self.C, self.kin
         gmin, gmax = A.fl["gripper"]
-        p = self.calib.xyz(u, v); p[2] += self.z_rel + 0.003
+        p = self.calib.xyz(u, v); p[2] += self.z_rel + 0.003 + dz        # dz: spot lower / higher than the plate (m)
         q, err, tilt, yaw, dyaw = kin.solve(kin.rad(C.wps("wp1")[0]["pos"]), p, yaw)
         roll = kin.ticks(q, 0)["wrist_roll"]
         if err > 0.004 or not A.fl["wrist_roll"][0] + 30 <= roll <= A.fl["wrist_roll"][1] - 30:
@@ -578,10 +735,23 @@ class VisionPick:
         q_h, _ = kin.ik.solve(q, p + [0, 0, HOVER], yaw, iters=60)
         self._goto(q_h, g_lock, 1.0); off = self._servo_in(q_h, g_lock)
         z0 = kin.fk(self._q_now())[0][2] - (p[2] + HOVER); n = 5; qd = q_h
+        stop_mm = 0.0
         for s_ in range(1, n + 1):
             z = p[2] + HOVER * (1 - s_ / n)
             qd, _ = kin.ik.solve(qd, np.array([p[0], p[1], z]), yaw, iters=30)
+            if careful:
+                # like the pick's descent: settle, correct the sag at every step, then test for contact. Without the
+                # correction the arm lagging behind read as "standing on the table" and the brick was let go 39 mm
+                # up (re-clamp spot, 2026-11-15 07:40), fell and turned 34 deg.
+                self._goto(qd, g_lock, 0.4, off); self._settle(0.4)
+                tgt = kin.ticks(qd, g_lock)
+                for n_ in off: off[n_] += max(-40.0, min(40.0, tgt[n_] - A.pos[n_]))
+                self._goto(qd, g_lock, 0.3, off); self._settle(0.4)
+                stop_mm = (kin.fk(self._q_now())[0][2] - p[2]) * 1000
+                if kin.fk(self._q_now())[0][2] - z > 0.005: break
+                continue
             self._goto(qd, g_lock, 0.4, off); time.sleep(0.08)
+            stop_mm = (kin.fk(self._q_now())[0][2] - p[2]) * 1000
             if kin.fk(self._q_now())[0][2] - z - z0 > 0.004: break       # the brick stands on the plate
         time.sleep(0.25)
         tcp, got, _ = kin.fk(self._q_now())
@@ -592,7 +762,8 @@ class VisionPick:
         self._goto(q2, g_open, 0.3, off)
         q3, _ = kin.ik.solve(q2, tcp - 0.006 * x + [0, 0, HOVER + 0.02], got, iters=40)
         self._goto(q3, g_open, 0.7, off)
-        return {"xyz": [float(v) for v in tcp], "yaw": float(got), "target_px": [float(u), float(v)]}
+        return {"xyz": [float(v) for v in tcp], "yaw": float(got), "target_px": [float(u), float(v)],
+                "above_target_mm": round(float(stop_mm), 1), "steps_done": s_}
 
     def run(self):
         A, C = self.A, self.C

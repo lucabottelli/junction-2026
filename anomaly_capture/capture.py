@@ -1083,8 +1083,8 @@ def index():
 
 @app.get("/")
 def root():
-    import ui                          # the control UI (web/); ui.router serves every other page path too
-    return ui.serve()
+    import ui                          # the user-facing page (web/operator.html); the dev interface is /dev and the page paths
+    return ui.operator()
 
 
 if __name__ == "__main__":
@@ -1113,7 +1113,10 @@ if __name__ == "__main__":
         frouter = feed.make_router(S, ARM, ACTX, crouter.collector, DATA, JOBS)
         app.include_router(frouter)
         import autocollect                                                          # automatic pick -> WP2 photos -> put back
-        app.include_router(autocollect.make_router(S, ARM, ACTX, crouter.collector, srouter.sorter, frouter.feeder, DATA))
+        acrouter = autocollect.make_router(S, ARM, ACTX, crouter.collector, srouter.sorter, frouter.feeder, DATA)
+        app.include_router(acrouter)
+        import flow                                                                 # production sort flow (/flow/*)
+        app.include_router(flow.make_router(S, ARM, ACTX, crouter.collector, srouter.sorter, frouter.feeder, acrouter.autocollect, DATA))
         if MOCK: mock_hw.attach(app, S, ARM, crouter.collector, srouter.sorter)
         print(f"control UI: http://127.0.0.1:{PORT}/  (steps: /connect /waypoints /crop /record /episodes /train /anomaly /sort)")
     except Exception as e:

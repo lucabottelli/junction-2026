@@ -33,6 +33,14 @@ const SLOTS={
  tape_regrip_above:{t:'Above the re-grip pose',s:'Above re-grip',single:1,opt:1,
   d:'Optional. The approach to the re-grip pose. Without it the robot uses the re-grip pose at the height of “above the tape spot”, then comes straight down.',
   how:'From the re-grip pose straight up a few cm, wrist still turned. Only the arm joints are used; the wrist roll is taken from the re-grip pose.'}};
+const PLATES=['plate_a','plate_b','plate_a_above','plate_b_above'];
+const plateSlot=(L,l)=>({t:'Plate '+L,s:'Plate '+L,single:1,
+  d:'Where the arm lets a sorted block go. On the user page “Accept plate” chooses whether plate A or plate B takes the accepted blocks; the other one takes the rejected ones.',
+  how:'Holding a block, about 3 cm above the middle of plate '+L+'. The robot comes down to this pose and opens the gripper.'});
+const plateAbove=(L)=>({t:'Above plate '+L,s:'Above '+L,single:1,opt:1,
+  d:'Optional. The arm travels to this pose first, then comes down onto plate '+L+'. Without it the arm goes over the plate at waypoint 1\'s height.',
+  how:'High enough above plate '+L+' to travel without hitting anything. The gripper value is ignored (the clamp stays locked).'});
+Object.assign(SLOTS,{plate_a:plateSlot('A'),plate_b:plateSlot('B'),plate_a_above:plateAbove('A'),plate_b_above:plateAbove('B')});
 const JS={shoulder_pan:'Pan',shoulder_lift:'Lift',elbow_flex:'Elbow',wrist_flex:'Wrist',wrist_roll:'Roll',gripper:'Grip'};
 const PH2=['wp2_above','wp2','tape_above','tape_place','tape_regrip','tape_regrip_above'];
 
@@ -119,13 +127,16 @@ function render(){
   +step('',`<b>Move the leader</b> into the pose described on the card below. For a pose that holds a brick, close the leader's gripper on it.`)
   +step('',`<b>Save current pose</b> on that card. To fix it later, move again and press <b>Set</b>. The gripper stored is what it is <i>commanded</i> to, so a held brick keeps its grip.`)
   +step('',`<b>Check it with Go:</b> the follower drives there slowly. Go switches the arm to Hold, so turn Mirror back on before teaching the next pose.`));
- const all=['home','wp1','drops',...PH2];
+ const all=['home','wp1','drops',...PH2,...PLATES];
+ const npl=['plate_a','plate_b'].filter(n=>wpsOf(n).length).length;
+ setH('wp-plates-n',`<span class="badge ${npl==2?'ok':'warn'}">${npl} of 2 taught</span><a class="btn sm ghost" href="/" target=_self>User page${ico('go')}</a>`);
  const sg=JSON.stringify([all.map(n=>wpsOf(n).map(x=>[x&&x.name,x&&x.pos,x&&x.capture,here(x)])),conn,s.running,ph2,rg,req,(C&&C.regrip_pose)||null]);
  if(sg==sig)return;sig=sg;
  const dis=!conn||s.running?'disabled':'';
  $('wp-route').innerHTML=route();
  $('wp-req').innerHTML=['home','wp1'].map(n=>card(n,dis)).join('');
  $('wp-opt').innerHTML=card('drops',dis);
+ $('wp-plates').innerHTML=PLATES.map(n=>card(n,dis)).join('');
  $('wp-ph2').innerHTML=PH2.map(n=>card(n,dis)).join('');
  $('wp-ph2').classList.toggle('off',!ph2)}
 

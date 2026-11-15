@@ -106,12 +106,12 @@
    {
     "name": "tape_above",
     "pos": {
-     "shoulder_pan": 2262,
-     "shoulder_lift": 1369,
-     "elbow_flex": 2603,
-     "wrist_flex": 2834,
-     "wrist_roll": 950,
-     "gripper": 1969
+     "shoulder_pan": 2218,
+     "shoulder_lift": 1757,
+     "elbow_flex": 2413,
+     "wrist_flex": 2975,
+     "wrist_roll": 1185,
+     "gripper": 2249
     },
     "capture": false
    }
@@ -123,12 +123,12 @@
    {
     "name": "tape_place",
     "pos": {
-     "shoulder_pan": 2285,
-     "shoulder_lift": 1930,
-     "elbow_flex": 2452,
-     "wrist_flex": 2881,
-     "wrist_roll": 806,
-     "gripper": 1967
+     "shoulder_pan": 2239,
+     "shoulder_lift": 1805,
+     "elbow_flex": 2618,
+     "wrist_flex": 2708,
+     "wrist_roll": 1213,
+     "gripper": 2248
     },
     "capture": false
    }

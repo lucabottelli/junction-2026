@@ -372,13 +372,20 @@ BRICK_HUES = {"pink": (168, 1), "red": (168, 1), "blue": (95, 115), "green": (22
 BRICK_SAT = {"green": (150, 100)}           # per brick: (sat_min, sat_weak) instead of the defaults
 JAW_HUE_BRICKS = {"pink", "red"}            # bricks whose hue the red jaws share (see brick_mask)
 OUTLINE_MARGIN = 3                          # px at 1/4 scale (~1 mm): the outline mask reaches this far past the block's colour blob
+OUTLINE_DEPTH_MM = 45                       # brick_mask(depth=...): valid depth within this of the block's own depth = held object
+OUTLINE_DEPTH_MIN = 50                      # fewer valid depth samples on the colour blob than this -> depth not used
+OUTLINE_GROW_MAX = 1.8                      # depth-aided hull larger than this x the colour-only hull -> keep the colour hull
+PLATE_NEAR_FRAC = 0.20                      # a plate-coloured patch with more near-depth pixels than this is on the block, kept
 
 
-def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_weak=140):
+def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_weak=140, depth=None):
     """Mask of the held brick: FOUND by its colour (saturated pixels in the brick's hue range, the largest blob weighted
     toward the image centre), but the mask is that blob's OUTLINE filled in, so tape, ink or a sticker on the block stay
     visible to the anomaly model. Robust at 10 cm where depth is patchy.
-    For pink the red jaws have the same hue (175-179) and are included (in every photo alike); the orange wrist-camera mount (hue 1-7) is not. -> (mask, info) / (None, why)."""
+    For pink the red jaws have the same hue (175-179) and are included (in every photo alike); the orange wrist-camera mount (hue 1-7) is not.
+    depth (optional, uint16 mm aligned to img, 0 = none; not used for pink/red): pixels with valid depth near the block's
+    own depth are part of the held object whatever their colour (tape the colour outline misses) -> grow the outline
+    into them and never drop them as plate. -> (mask, info) / (None, why)."""
     if brick not in BRICK_HUES: return None, f"no colour range for brick '{brick}'"
     H, W = img.shape[:2]; sm = cv2.resize(img, (W // s, H // s), interpolation=cv2.INTER_AREA)
     hsv = cv2.cvtColor(sm, cv2.COLOR_BGR2HSV); h = hsv[..., 0]; lo, hi = BRICK_HUES[brick]
@@ -411,20 +418,48 @@ def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_wea
         # between the jaws. Close gaps up to ~15 mm instead (tape across an edge, a pen mark, a pale face).
         shape = fill_holes(cv2.morphologyEx(out, cv2.MORPH_CLOSE, el(45)))
     else:
-        cs, _ = cv2.findContours(out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        hull = cv2.fillConvexPoly(np.zeros_like(out), cv2.convexHull(np.vstack(cs)), 255)
+        # tape across the block cuts its colour into pieces (2026-11-15: a strip over the top face left the front face
+        # as the only blob and the mask lost half the block AND the tape): the outline spans every piece of the
+        # brick's colour within ~2 cm of the main blob that is not tiny
+        near = cv2.dilate(out, el(61)) > 0; parts = out.copy(); seed_px = int((out > 0).sum())
+        for k in np.unique(lab2[near & (lab2 > 0)]):
+            comp = lab2 == k
+            if comp.sum() >= 0.02 * seed_px: parts[comp] = 255
+        hull_of = lambda pm: cv2.fillConvexPoly(np.zeros_like(out), cv2.convexHull(
+            np.vstack(cv2.findContours(pm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0])), 255)
+        hull = hull_of(parts)
+        jl, jh = BRICK_HUES["red"]; jaw = ((h >= jl) | (h <= jh)) & (hsv[..., 1] >= 150)
+        jaw = cv2.morphologyEx(jaw.astype(np.uint8), cv2.MORPH_CLOSE, el(9))                # the ribbed jaw as one piece
+        # DEPTH (2026-11-15): woven tape on a blue side face looked brown (hue 6-10) - outside the colour outline and,
+        # touching the orange plate behind, dropped as plate. The depth window is near (~75-174 mm): the table and
+        # plates have no depth, the held block and what sticks on it do.
+        zb, znear, depth_used = None, None, False
+        if depth is not None:
+            dz = depth if depth.shape[:2] == out.shape else cv2.resize(depth, (out.shape[1], out.shape[0]), interpolation=cv2.INTER_NEAREST)
+            dv = dz[(out > 0) & (dz > 0)]
+            if dv.size >= OUTLINE_DEPTH_MIN:
+                zb = float(np.median(dv)); depth_used = True
+                znear = (dz > 0) & (np.abs(dz.astype(np.float32) - zb) <= OUTLINE_DEPTH_MM)
+                nd = cv2.morphologyEx((znear & (jaw == 0)).astype(np.uint8), cv2.MORPH_OPEN, el(3))
+                nn, labn = cv2.connectedComponents(nd)
+                touch = cv2.dilate(hull, el(9)) > 0; parts_d = parts.copy()
+                for k in np.unique(labn[touch & (labn > 0)]):
+                    parts_d[(labn == k) & near] = 255                       # its part within ~2 cm of the blob
+                hull_d = hull_of(parts_d)
+                if (hull_d > 0).sum() <= OUTLINE_GROW_MAX * (hull > 0).sum(): hull = hull_d
         hull = cv2.dilate(hull, el(2 * OUTLINE_MARGIN + 1))
         # what is NOT the block inside the hull: a red jaw in front of it, the orange plate / table behind a corner.
         # Both reach beyond the hull. A red or orange patch that lies wholly inside it is something stuck on the block
-        # (tape, a sticker, ink) and is kept.
-        jl, jh = BRICK_HUES["red"]; jaw = ((h >= jl) | (h <= jh)) & (hsv[..., 1] >= 150)
-        jaw = cv2.morphologyEx(jaw.astype(np.uint8), cv2.MORPH_CLOSE, el(9))                # the ribbed jaw as one piece
+        # (tape, a sticker, ink) and is kept. With depth, a plate-coloured patch that is mostly near is kept too.
         plate = ((h >= 3) & (h <= 19) & (hsv[..., 1] >= 190) & (hsv[..., 2] >= 110)).astype(np.uint8)
         bad = cv2.morphologyEx(jaw | plate, cv2.MORPH_OPEN, el(5))
         nb, labb = cv2.connectedComponents(bad); drop = np.zeros_like(bad)
         for k in np.unique(labb[(hull > 0) & (labb > 0)]):
             comp = labb == k; inside = int((comp & (hull > 0)).sum()); outside = int(comp.sum()) - inside
-            if outside > max(12, 0.15 * inside): drop |= comp.astype(np.uint8)
+            if outside > max(12, 0.15 * inside):
+                if znear is not None and not (comp & (jaw > 0)).any() and (comp & znear).sum() > PLATE_NEAR_FRAC * comp.sum():
+                    continue                                                # near depth: on the block, not the far plate
+                drop |= comp.astype(np.uint8)
         shape = np.where((hull > 0) & ((out > 0) | (drop == 0)), 255, 0).astype(np.uint8)
         shape = cv2.morphologyEx(cv2.morphologyEx(shape, cv2.MORPH_OPEN, el(9)), cv2.MORPH_CLOSE, el(11))
         n3, lab3, st3, _ = cv2.connectedComponentsWithStats(shape)
@@ -432,7 +467,35 @@ def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_wea
         shape = fill_holes(shape)
     big = cv2.GaussianBlur(cv2.resize(shape, (W, H), interpolation=cv2.INTER_LINEAR), (0, 0), 5)
     big = (big >= 128).astype(np.uint8) * 255                                               # smooth edge
-    return big, {"z_mm": None, "area_px": int((big > 0).sum()), "blob_px": area * s * s, "search": "colour", "brick": brick}
+    info = {"z_mm": None, "area_px": int((big > 0).sum()), "blob_px": area * s * s, "search": "colour", "brick": brick}
+    info["depth_used"] = bool(depth is not None and brick not in JAW_HUE_BRICKS and depth_used)
+    if info["depth_used"]: info["block_z_mm"] = zb                                         # z_mm stays None: colour mask
+    return big, info
+
+
+FOREIGN_MAX = 0.05      # largest not-block-coloured patch, as a share of the block's outline: above this = something is on it
+                        # (clean photos, 2026-11-15: blue <= 0.042, green <= 0.031, pink <= 0.022 over 339 photos; real tape: 0.25)
+
+
+def foreign_share(img, brick, mask=None, s=4):
+    """Direct check for something stuck on the block (tape, sticker, coloured ink), independent of the anomaly model:
+    inside the block's outline, the largest connected patch that is NOT block-coloured - grey / white (low saturation,
+    not a blown-out highlight) or a saturated other hue - as a share of the outline's area. -> (largest patch share,
+    all foreign share) or None without a mask. Dark marks (black pen) are left to the model: shadows are dark too."""
+    if mask is None: mask, _ = brick_mask(img, brick)
+    if mask is None or brick not in BRICK_HUES: return None
+    H, W = img.shape[:2]; sm = cv2.resize(img, (W // s, H // s), interpolation=cv2.INTER_AREA)
+    ms = cv2.resize(mask, (W // s, H // s), interpolation=cv2.INTER_NEAREST)
+    ms = cv2.erode(ms, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))) > 0
+    hsv = cv2.cvtColor(sm, cv2.COLOR_BGR2HSV).astype(int); h, sa, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    lo, hi = BRICK_HUES[brick]; tol = 8
+    inh = ((h >= lo - tol) & (h <= hi + tol)) if lo <= hi else ((h >= lo - tol) | (h <= hi + tol))
+    f = (((sa < 80) & (v > 70)) | ((~inh) & (sa >= 90) & (v > 45))) & ms         # v > 45: dark coloured tape (was 70)
+    f = cv2.morphologyEx(f.astype(np.uint8), cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    # woven / printed tape is specks of grey between dark threads: join them into one patch
+    f = cv2.morphologyEx(f, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))) & ms.astype(np.uint8)
+    n, _, st, _ = cv2.connectedComponentsWithStats(f); a = float(ms.sum()) or 1.0
+    return (float(st[1:, cv2.CC_STAT_AREA].max()) / a if n > 1 else 0.0), float(f.sum()) / a
 
 
 def apply_mask(img, mask):
@@ -453,6 +516,9 @@ def inspect_crop(img, depth_mm=None, pad=0.08):
     cfg = {"inhand_cfg": {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in INHAND.items()}}
     if TUNING: return img, {"masked": False, "why": "depth auto-tune running", **cfg}
     if INHAND.get("brick"):                      # colour mask of the named brick (robust at 10 cm, no depth needed)
+        # depth=depth_mm NOT passed (2026-11-15, eval_outline_depth.py): the depth-aided outline missed the tape it was
+        # meant to catch (2.8 % of its pixels have depth) and grew into gripper / camera board on clean photos
+        # (foreign_share >= 0.06 on 24 of 235 clean blue+green photos vs 0 colour-only)
         m, info = brick_mask(img, INHAND["brick"])
         if m is None: return img, {"masked": False, "why": info, **cfg}
         info = {**info, **cfg}

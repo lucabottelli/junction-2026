@@ -1103,3 +1103,9 @@ Libraries can supply the building blocks. The sequence itself (set the brick dow
   - **False "lost it on the way to WP1":** 3 picks in 20 (07:10 and 07:15 runs) were held (jaws 51–54 ticks short of the squeeze command, brick visible in the wrist photo) but the top-camera check at WP1 reported the colour "still on the plate". Cause: at WP1 the top camera sees a pink blob at ≈(1565, 255) px, the gripper with or without a pink brick in it (also there when green is held). Fix: `SURE_TICKS = 40`; with that margin the pick is held whatever the camera sees, below it the camera still decides. Recorded held picks have margins 31–56, the false ones 51–54.
   - **Result with fast + fix:** 9/10 on random colours, 1 real miss (blue, closed on nothing) (`runs/acttest_20261115_072304`). Before the fix: 7/10 and 6/10 reported, 8/10 and 8/10 real. No same-code baseline at normal speed (the control run was cut off by another session's restart at 07:20).
   - Not committed yet: `vpick.py` / `sorter.py` also hold another session's uncommitted re-clamp edits.
+
+## Features for the user-facing interface (to build once everything works)
+
+List of controls that exist in the engineering tool (`127.0.0.1:7870`) and are to be carried over to the final user-facing interface. Add to it as features are decided.
+
+- **Vision pick: fast (toggle).** Decided by the user 2026-11-15 07:30. On = ≈14 s per pick (3 descent steps, quicker travel), off = 18–22 s (6 corrected steps). Backend: cfg key `vision_fast` (`POST /sort/cfg?vision_fast=0|1`, default on), `VisionPick(fast=)` in `anomaly_capture/vpick.py`. Today's switch: "Vision pick: fast" on the Sort page (`web/pages/08-sort.html`, id `so-vfast`). Measured 9/10 with it on; no same-code baseline with it off yet.

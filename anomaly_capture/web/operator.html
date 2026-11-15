@@ -4,7 +4,7 @@
 <link rel=icon href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000000'/%3E%3Crect x='8' y='13' width='16' height='10' rx='1.5' fill='%23F4F6F8'/%3E%3Crect x='10' y='9' width='4' height='4' rx='1' fill='%23F4F6F8'/%3E%3Crect x='18' y='9' width='4' height='4' rx='1' fill='%23F4F6F8'/%3E%3C/svg%3E">
 <!-- The user-facing page (served at /). Standalone on purpose: no dependency on the dev interface's shell, core.js
      or style.css, so work on the dev pages (/dev, /sort, ...) can't break it.
-     It only calls: /status, /arm/status, /arm/connect, /sort/status, /flow/*, /sort/cfg (vision_fast), /snap/<cam>, the stops. -->
+     It only calls: /status, /arm/status, /arm/connect, /sort/status, /flow/*, /telemetry, /sort/cfg (vision_fast), /snap/<cam>, the stops. -->
 <style>
 @font-face{font-family:"Inter";font-style:normal;font-weight:100 900;font-display:swap;src:url(/static/fonts/Inter-var-latin.woff2) format("woff2")}
 /* Layout: one screen. A floating glass control panel on the left; the live camera is the stage and fills the rest;
@@ -65,6 +65,23 @@ body.pre *,body.pre *::after,body.pre *::before{transition:none!important}
 .mini:disabled{color:var(--ink3);cursor:default;box-shadow:none}
 
 .ctl{display:grid;gap:14px;padding:0 2px}
+/* system: live SoC power, temperature and per-device load (GET /telemetry, 1 Hz) */
+.sys{display:grid;gap:7px}
+.sys>.l{font-size:12px;font-weight:500;color:var(--ink3);padding-left:6px}
+.sys .group{display:grid;gap:10px;padding:12px 14px}
+.sys .big{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sys .big div{display:grid;gap:3px}
+.sys .n{font-size:20px;font-weight:300;line-height:1;letter-spacing:-.03em}.sys .n small{font-size:11.5px;color:var(--ink3);margin-left:3px;letter-spacing:0}
+.sys .k{font-size:11.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sys svg{width:100%;height:24px;display:block;overflow:visible}
+.sys svg path{fill:none;stroke:var(--ink2);stroke-width:1.4;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.sys .dev{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.sys .dev div{display:grid;gap:5px}
+.sys .dev .t{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink3)}.sys .dev .t b{font-weight:500;color:var(--ink2)}
+/* short screens: Start and Stop must stay on screen, so the system card drops its label and sparkline first */
+@media (max-height:880px){.panel{gap:12px}.sys>.l,.sys svg{display:none}}
+.panel{scrollbar-width:thin;scrollbar-color:var(--ink4) transparent}
+.sys .bar{height:3px;border-radius:2px;background:var(--fill)}.sys .bar i{display:block;height:100%;border-radius:2px;background:var(--ink2);transition:width .6s}
 .field{display:grid;gap:7px}
 .field>.l{font-size:12px;font-weight:500;color:var(--ink3);padding-left:6px}
 .seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;padding:3px;border-radius:12px;background:rgba(0,0,0,.30);box-shadow:inset 0 0 0 1px var(--line)}
@@ -174,6 +191,18 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
  <div class=group><div class=rowi><span>Fast pick</span><button type=button class=sw id=sw-fast onclick="setFast()" aria-label="Fast pick"></button></div>
   <div class=rowi><span>Fast moves</span><button type=button class=sw id=sw-mfast onclick="setMFast()" aria-label="Fast moves"></button></div></div>
 
+ <div class=sys id=sys hidden>
+  <div class=l>System</div>
+  <div class=group>
+   <div class=big>
+    <div><span class="n num" id=sy-w>–</span><span class=k>Package power</span></div>
+    <div><span class="n num" id=sy-t>–</span><span class=k id=sy-h>Temperature</span></div>
+   </div>
+   <svg viewBox="0 0 120 24" preserveAspectRatio=none aria-hidden=true><path id=sy-spark d=""/></svg>
+   <div class=dev id=sy-dev></div>
+  </div>
+ </div>
+
  <span class=sp></span>
  <div class=why id=why></div>
  <div class=actions>
@@ -211,7 +240,7 @@ const STATE={idle:'Idle',vision:'Picking',look:'Looking',place:'Setting down',in
 const STEPS=[['Pick',['vision','look','place']],['Inspect',['inspect','judge']],['Re-clamp',['regrasp']],['Sort',['sort_good','sort_defect']]];
 const ICON={play:'<svg class=i viewBox="0 0 16 16"><path d="M4.2 2.3v11.4a.6.6 0 0 0 .92.5l8.9-5.7a.6.6 0 0 0 0-1L5.12 1.8a.6.6 0 0 0-.92.5z"/></svg>',
  pause:'<svg class=i viewBox="0 0 16 16"><rect x="3" y="2" width="3.6" height="12" rx="1"/><rect x="9.4" y="2" width="3.6" height="12" rx="1"/></svg>'};
-let S=null,A=null,SO=null,FL=null,flowMissing=false,connecting=false,sel={n:0,colour:'',cam:'front',sheet:false};
+let S=null,A=null,SO=null,FL=null,TM=null,flowMissing=false,connecting=false,sel={n:0,colour:'',cam:'front',sheet:false};
 try{Object.assign(sel,JSON.parse(localStorage.getItem('op-sel')||'{}'))}catch(e){}
 if(!CAMS.some(c=>c[0]==sel.cam))sel.cam='front';
 
@@ -259,7 +288,16 @@ function problems(){const p=[];
  if(S){const bad=['top','front'].filter(c=>!(S.live||[]).includes(c));if(bad.length)p.push('Camera down: '+bad.join(', '))}
  if(FL){const un=Object.entries(FL.plates||{}).filter(([k,v])=>!v).map(([k])=>PLATE[k]||k);if(un.length)p.push(un.join(' and ')+' not taught')}
  return p}
+function spark(v){const p=v.filter(x=>x!=null);if(p.length<2)return'';const lo=Math.min(...p),hi=Math.max(...p),r=Math.max(hi-lo,2),n=v.length;
+ let d='',pen=false;v.forEach((x,i)=>{if(x==null){pen=false;return}const X=(i/(n-1)*120).toFixed(1),Y=(22-(x-lo)/r*20).toFixed(1);d+=(pen?'L':'M')+X+' '+Y;pen=true});return d}
+function renderSys(){const t=TM;$('sys').hidden=!(t&&t.ok);if(!t||!t.ok)return;
+ setH('sy-w',t.pkg_w!=null?`${t.pkg_w.toFixed(1)}<small>W</small>`:'–');
+ setH('sy-t',t.temp_c!=null?`${Math.round(t.temp_c)}<small>°C</small>`:'–');
+ $('sy-h').textContent=t.headroom_c!=null?`${Math.round(t.headroom_c)} °C headroom`:'Temperature';
+ $('sy-spark').setAttribute('d',spark(((t.history||{}).pkg_w||[]).slice(-60)));
+ setH('sy-dev',[['iGPU',t.gpu_pct],['NPU',t.npu_pct],['CPU',t.cpu_pct]].map(([k,v])=>`<div><span class=t>${k}<b class=num>${v!=null?Math.round(v)+'%':'–'}</b></span><span class=bar><i style="width:${v!=null?Math.max(0,Math.min(100,v)):0}%"></i></span></div>`).join(''))}
 function render(){
+ renderSys();
  const live=S?(S.live||[]):[],conn=!!(A&&A.connected);
  $('camdot').className='dot '+(S&&live.length>=3?'ok':'');$('camtxt').textContent=!S?'Offline':live.length+' live';
  $('livedot').className='dot '+(live.includes(sel.cam)?'ok':'');
@@ -287,13 +325,14 @@ function render(){
  const t=FL?FL.totals:{};$('t-a').textContent=t.accept||0;$('t-r').textContent=t.reject||0;$('t-x').textContent=t.aborted||0;
  const h=FL?FL.history||[]:[];$('sheet').classList.toggle('open',!!sel.sheet);
  const L=h.find(r=>r.t_cycle_s!=null)||{},Li=h.find(r=>r.infer_ms_mean!=null)||{},f=(v,u)=>v!=null?`${v}<small>${u}</small>`:'–';
- setH('lat',[['Inference'+(Li.device?' · '+esc(Li.device):''),f(Li.infer_ms_mean,'ms')],['Pick',f(L.t_pick_s,'s')],['Inspect',f(L.t_inspect_s,'s')],['Sort',f(L.t_sort_s,'s')],['Cycle',f(L.t_cycle_s,'s')]]
+ setH('lat',[['Inference'+(Li.device?' · '+esc(Li.device):''),f(Li.infer_ms_mean,'ms')],['Pick',f(L.t_pick_s,'s')],['Inspect',f(L.t_inspect_s,'s')],['Sort',f(L.t_sort_s,'s')],['Cycle',f(L.t_cycle_s,'s')],['Energy',L.energy_j==null?'–':L.energy_j>=1000?f((L.energy_j/1000).toFixed(1),'kJ'):f(Math.round(L.energy_j),'J')]]
   .map(([k,v])=>`<div><span class="n num">${v}</span><span class=k>${k}</span></div>`).join(''));
  setH('sheet',h.map(r=>`<div class=row><span class="n num">${r.block}</span><span>${esc(r.brick||'')}</span><span class="v-${esc(r.verdict)}">${esc(({accept:'Accepted',reject:'Rejected',aborted:'Aborted'})[r.verdict]||r.verdict)}</span><span class=why2>${esc(r.reason||'')}</span><span class="n num">${r.infer_ms_mean!=null?r.infer_ms_mean+' ms':''}</span><span class="n num">${r.t_cycle_s!=null?r.t_cycle_s+' s':''}</span></div>`).join(''))}
 
 /* ---------- polling ---------- */
 async function refresh(){
- const r=await Promise.allSettled([get('/status'),get('/arm/status'),get('/sort/status'),get('/flow/status')]);
+ const r=await Promise.allSettled([get('/status'),get('/arm/status'),get('/sort/status'),get('/flow/status'),get('/telemetry?history=1')]);
+ TM=r[4].status=='fulfilled'?r[4].value:null;
  S=r[0].status=='fulfilled'?r[0].value:null;A=r[1].status=='fulfilled'?r[1].value:null;SO=r[2].status=='fulfilled'?r[2].value:null;
  if(r[3].status=='fulfilled'){FL=r[3].value;flowMissing=false}else{FL=null;flowMissing=!!S&&String(r[3].reason&&r[3].reason.message)=='404'}
  render();if(S||A||SO)requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('pre')))}

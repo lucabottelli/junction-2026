@@ -53,6 +53,7 @@ DEFAULT_ROI = {"top": [712, 278, 1132, 638], "front": [840, 240, 1380, 780], "wr
 AVG = {"top": 16, "front": 16, "wrist": 8}  # frames averaged per saved image (~sqrt(N) less sensor noise)
 MOTION_MAX = 4.0     # mean abs change (0-255) inside the brick box during averaging; above = "moved"
 PREVIEW_W = 640
+VIEW_W = 1280        # width of the clean (no boxes) camera view of the user page
 # thin-structure filter size at 1/4 scale: about half the brick's smallest side on that camera
 # (top brick ~20 px, front ~50 px, wrist ~30+ px at 1/4 scale)
 OPEN_K = {"top": 9, "front": 15, "wrist": 13}
@@ -357,7 +358,7 @@ class State:
         self.recent = []          # (caption, png bytes), newest first
         self.boxes = {k: [] for k in CAMS}
         self.stale = {k: 0.0 for k in CAMS}
-        self.preview = {k: None for k in CAMS}; self.zoomj = {k: None for k in CAMS}
+        self.preview = {k: None for k in CAMS}; self.zoomj = {k: None for k in CAMS}; self.clean = {k: None for k in CAMS}
         self.msg, self.ok = "ready", True
         for k in self.live:
             threading.Thread(target=self._loop, args=(k,), daemon=True).start()
@@ -401,6 +402,8 @@ class State:
                                                interpolation=cv2.INTER_NEAREST if zs > 1 else cv2.INTER_AREA), 92)
             else:
                 self.zoomj[k] = None
+            # the same frame WITHOUT the boxes, larger: the user page's camera views (/view/<cam>)
+            self.clean[k] = jpg(cv2.resize(f, (VIEW_W, VIEW_W * f.shape[0] // f.shape[1]), interpolation=cv2.INTER_AREA), 80)
             vis = f.copy()
             cv2.rectangle(vis, tuple(roi[:2]), tuple(roi[2:]), (255, 200, 0), 4)
             for i, (x, y, w, h) in enumerate(boxes):
@@ -451,6 +454,13 @@ def mjpeg(getter, period):
             if b: yield b"--f\r\nContent-Type: image/jpeg\r\n\r\n" + b + b"\r\n"
             time.sleep(period)
     return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=f")
+
+
+@app.get("/view/{cam}")
+def view(cam: str):
+    """The live camera picture without the detection boxes (user page). Falls back to the boxed preview."""
+    c = getattr(S, "clean", {}).get(cam) or S.preview.get(cam)
+    return Response(c or OFFLINE, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/snap/{cam}")

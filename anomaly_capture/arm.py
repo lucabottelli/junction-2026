@@ -86,6 +86,10 @@ def _limits(b):
             for n in JOINTS}
 
 
+class Interrupted(Exception):
+    """A move was cut short on purpose (Arm.intr). Not a stop: the caller decides where the arm goes next."""
+
+
 class Stopped(Exception):
     pass
 
@@ -239,8 +243,12 @@ class Arm:
             time.sleep(max(0.0, dt - (time.time() - t0)))
 
     # ---------------------------------------------------------------- motion
+    intr = None      # threading.Event or None: while set, a running goto / path raises Interrupted (flow.py: a photo judged
+                     # in the background turned out not clean). The arm then holds where it is; nothing else changes.
+
     def _check(self):
         if self.stop.is_set(): raise Stopped()
+        if self.intr is not None and self.intr.is_set(): raise Interrupted()
 
     def goto(self, tgt, speed):
         """Move of all joints from the current command to `tgt`, all arriving together. Minimum jerk (peak speed =
@@ -445,23 +453,27 @@ def make_router(S, DATA, AVG, say_recent):
         except Exception as e: say(f"ERROR: {e}", False)
 
     # ---- run
-    def capture(cams, label, brick, view, cycle, run_id, kind="inhand"):
+    def capture(cams, label, brick, view, cycle, run_id, kind="inhand", shots=None, depth=None, joints=None, out=None):
         """kind="inhand": brick held in front of the camera (depth-masked crop).
-        kind="release": brick lying released on the tape spot, seen from above (fixed crop, prep.release_crop)."""
-        shots = S.averaged(cams)
+        kind="release": brick lying released on the tape spot, seen from above (fixed crop, prep.release_crop).
+        shots / depth / joints: frames grabbed EARLIER (S.averaged result, {cam: depth of that moment or None}, the
+        joints then): only the processing and saving happens now, possibly in another thread while the arm already
+        moves on (flow.py). out: a list that gets the meta records written."""
+        grabbed = shots is not None
+        if shots is None: shots = S.averaged(cams)
         group = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         files = []
         for k, (f, first, last) in shots.items():
             d = DATA / k / "inhand" / label; d.mkdir(parents=True, exist_ok=True)
             p = d / f"{group}_{brick or 'nobrick'}_{view}.png"; cv2.imwrite(str(p), f); files.append(p)
             motion = float(np.abs(cv2.blur(first, (5, 5)) - cv2.blur(last, (5, 5))).mean())
-            dep = getattr(S.cams[k], "depth", None); dinfo = None
+            dep = (depth or {}).get(k) if grabbed else getattr(S.cams[k], "depth", None); dinfo = None
             dcfg = S.cams[k].depth_info() if kind == "inhand" and hasattr(S.cams[k], "depth_info") else None   # provenance
             if kind == "inhand" and dcfg is not None:          # why there is no mask, instead of a silent None
                 if prep.TUNING: dep, dinfo = None, "depth auto-tune running"
                 elif dep is None: dinfo = "no depth"
-                elif time.time() - S.cams[k].depth_t >= 1.0: dinfo = f"stale depth ({time.time() - S.cams[k].depth_t:.1f} s old)"
-            if dep is not None and time.time() - S.cams[k].depth_t >= 1.0: dep = None
+                elif not grabbed and time.time() - S.cams[k].depth_t >= 1.0: dinfo = f"stale depth ({time.time() - S.cams[k].depth_t:.1f} s old)"
+            if dep is not None and not grabbed and time.time() - S.cams[k].depth_t >= 1.0: dep = None
             if kind == "release":
                 crop, cinfo = prep.release_crop(f, k)             # the exact anomaly-model input (sorter.py uses the same)
             else:
@@ -478,15 +490,17 @@ def make_router(S, DATA, AVG, say_recent):
             if cinfo.get("masked"):
                 cp = d / f"{group}_{brick or 'nobrick'}_{view}_crop.png"; cv2.imwrite(str(cp), crop); files.append(cp)
             with open(DATA / "meta.jsonl", "a") as m:
-                m.write(json.dumps({"file": str(p.relative_to(DATA)), "stage": kind, "cam": k, "group": group,
+                rec = {"file": str(p.relative_to(DATA)), "stage": kind, "cam": k, "group": group,
                                     "label": label, "brick": brick, "view": view, "cycle": cycle, "run": run_id,
-                                    "routine": R["cur"], "joints": {n: int(x) for n, x in A.pos.items()},
+                                    "routine": R["cur"], "joints": joints or {n: int(x) for n, x in A.pos.items()},
                                     "motion": round(motion, 2), "frames_averaged": AVG[k], "time": group,
                                     "depth": dinfo if isinstance(dinfo, dict) else None,
                                     "depth_mask_why": dinfo if isinstance(dinfo, str) else None,
                                     "depth_cfg": dcfg,
                                     "inhand_cfg": (cinfo.get("inhand_cfg") or dict(prep.INHAND)) if kind == "inhand" else None,
-                                    "cam_settings": S.cams[k].settings}) + "\n")
+                                    "cam_settings": S.cams[k].settings}
+                m.write(json.dumps(rec) + "\n")
+                if out is not None: out.append(rec)
             say_recent(f"{k} · {view}", f)
         S.saved.append((files, len(files)))
         return len(files)

@@ -17,6 +17,25 @@ import cv2
 import numpy as np
 
 CACHE = {}
+STATIC = {}                 # (model, device) -> (h, w) the input is resized to (NPU: static shapes only)
+
+
+def npu_model(model):
+    """The NPU compiles static shapes only, and the Anomalib export has a dynamic [1,3,?,?] input (its graph resizes
+    any crop to the training size itself). -> path of a sibling IR fixed at that size (written once, rewritten when
+    the export is newer) and its (h, w). The caller resizes each crop to (h, w), so the graph's own resize is a no-op;
+    CPU / GPU keep the dynamic export untouched."""
+    import openvino as ov
+    from pathlib import Path
+    src = Path(model)
+    m = ov.Core().read_model(str(src))
+    amap = next((o for o in m.outputs if "anomaly_map" in o.get_names()), m.outputs[-1])
+    h, w = (int(d) for d in amap.get_partial_shape().to_shape()[-2:])
+    dst = src.with_name(f"{src.stem}_static{h}x{w}.xml")
+    if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+        m.reshape({m.inputs[0].any_name: [1, 3, h, w]})
+        ov.save_model(m, str(dst), compress_to_fp16=False)      # weights are already FP16 in the source IR
+    return str(dst), (h, w)
 
 
 def _get(p, k):
@@ -31,7 +50,10 @@ def load(model, device):
     t0 = time.perf_counter()
     if model.endswith(".xml") or model.endswith(".onnx"):
         from anomalib.deploy import OpenVINOInferencer
-        inf = OpenVINOInferencer(path=model, device=device or "AUTO")
+        path = model
+        if (device or "").upper() == "NPU" and model.endswith(".xml"):
+            path, STATIC[key] = npu_model(model)
+        inf = OpenVINOInferencer(path=path, device=device or "AUTO")
     else:
         from anomalib.deploy import TorchInferencer
         dev = {"GPU": "xpu", "NPU": "cpu", "CPU": "cpu", "AUTO": "auto"}.get(device or "AUTO", device)
@@ -52,8 +74,13 @@ def heatmap(img_path, amap, out):
 
 def handle(req):
     inf, load_ms = load(req["model"], req.get("device"))
+    hw = STATIC.get((req["model"], req.get("device")))
+    img = req["image"]
+    if hw:                                       # static-shape model: resize the crop like the graph would
+        img = cv2.cvtColor(cv2.imread(req["image"]), cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (hw[1], hw[0]), interpolation=cv2.INTER_AREA if img.shape[0] > hw[0] else cv2.INTER_LINEAR)
     t0 = time.perf_counter()
-    pred = inf.predict(image=req["image"])
+    pred = inf.predict(image=img)
     ms = (time.perf_counter() - t0) * 1000
     score = float(np.asarray(_get(pred, "pred_score")).reshape(-1)[0])
     lab = _get(pred, "pred_label")

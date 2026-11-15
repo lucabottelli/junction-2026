@@ -15,6 +15,7 @@ class FakeC:
     def __init__(self, log):
         self.log = log; self.cfg = {"speed": 1.0}; self.stop_flag = threading.Event(); self.active = False
         self.pos = {"gripper": 3000}; self.stuck = False        # measured joints (shared with the fake arm)
+        self.A = None; self.on_goto = None
         self.slots = {"plate_a": [{"pos": {"shoulder_pan": 1, "shoulder_lift": 500, "elbow_flex": 500, "wrist_flex": 500}}],
                       "plate_b": [{"pos": {"shoulder_pan": 2, "shoulder_lift": 500, "elbow_flex": 500, "wrist_flex": 500}}]}
     def wps(self, n):
@@ -22,6 +23,8 @@ class FakeC:
         return [{"name": n, "pos": {"id": n, "shoulder_lift": 0, "elbow_flex": 0, "wrist_flex": 0}}]
     def slot(self, n): return self.slots.get(n)
     def goto(self, pos, *a, **k):
+        if self.on_goto: self.on_goto(pos)
+        if self.A is not None and getattr(self.A, "intr", None) is not None and self.A.intr.is_set(): raise flow.Interrupted()
         self.log.append(("goto", pos.get("id") or pos.get("shoulder_pan"), k.get("gripper")))
         if not self.stuck: self.pos.update({n: v for n, v in pos.items() if n != "id"})
         if k.get("gripper") is not None: self.pos["gripper"] = k["gripper"]
@@ -64,8 +67,10 @@ def make(tmp_path, verdicts, turns=(90, 90, 90), **kw):
     A = types.SimpleNamespace(stop=threading.Event(), cmd={"id": "here", "gripper": 2000}, running=False, mode="hold",
                               pos=C.pos, fl={"gripper": (1875, 3200)})
     F = types.SimpleNamespace(lift={}, lifted=lambda wp2, brick: wp2)
+    C.A = A
     FL = flow.Flow(None, A, None, C, T, F, None, tmp_path); FL.at_wait = 0
-    FL.cfg.update({"accept": "plate_a", "reject": "plate_b", "max_reclamps": 4, "retakes": 1, "uncertain_to": "reject", "side_view": ""})
+    FL.cfg.update({"accept": "plate_a", "reject": "plate_b", "max_reclamps": 4, "retakes": 1, "uncertain_to": "reject", "side_view": "",
+                   "async_judge": False})          # the tests below script the waiting flow; the background judge has its own tests
     FL.cfg_path = tmp_path / "flow_settings.json"
     seq = list(verdicts)
     def shot(brick, view, idx):
@@ -336,3 +341,84 @@ def test_arm_path_keeps_moving_through_the_via_points_and_ends_exactly():
     assert 5 < near < 0.5 * arm.CORNER                                                     # rounds the via point, stays close to it
     assert all(x["shoulder_pan"] <= 2600.0 + 1e-6 and x["shoulder_lift"] <= 2500.0 + 1e-6 for x in g)   # no overshoot
     assert max(step) < 1.3 * arm.VMAX * 0.02 * 1.01                                        # not faster than a single move at this speed
+
+
+# ---------------------------------------------------------------- judging in the background (cfg async_judge)
+def make_async(tmp_path, results, **kw):
+    """results: {photo number (1-based): verdict}; everything else is clean. The fake worker result of a photo can be
+    held back with FL.hold[n] = threading.Event() (it is delivered when the event is set)."""
+    FL, T, log = make(tmp_path, [], **kw); FL.cfg["async_judge"] = True; FL.hold = {}; n = {"i": 0}
+    def snap(brick, view, idx, model, t_low, t_high):
+        n["i"] += 1; i = n["i"]; log.append(("photo", view))
+        def finish():
+            if i in FL.hold: FL.hold[i].wait(5)
+            v = results.get(i, "clean")
+            return {"view": view, "file": "x.png", "ok": True, "cut": False, "why": None, "verdict": v, "reason": v}
+        return finish
+    FL.snap = snap
+    return FL, T, log
+
+
+def test_background_judge_clean_block_never_waits_and_is_accepted(tmp_path):
+    FL, T, log = make_async(tmp_path, {})
+    rec = FL.cycle(1, "")
+    assert rec["verdict"] == "accept" and rec["reclamps"] == 3 and plate(log) == 1
+    assert photos(log) == ["wp2-1", "wp2-2", "wp2-3", "wp2-1", "wp2-1", "wp2-1"]
+    assert all(st.get("background") for st in rec["steps"]) and len(rec["steps"]) == 6
+    paths = [x[1] for x in log if x[0] == "path"]
+    assert ["wp2-1", "wp2_above", "tape_above"] in paths              # after the photos: straight on toward the tape spot
+    assert ["wp2_above", 1] in paths                                   # after the last showing: straight on toward the accept plate
+
+
+def test_background_anomaly_interrupts_the_move_and_goes_to_the_reject_plate(tmp_path):
+    FL, T, log = make_async(tmp_path, {1: "defect"})
+    FL.hold[1] = threading.Event()                                     # the verdict of photo 1 arrives late ...
+    def on_goto(pos):
+        if pos.get("id") == "tape_above":                              # ... while the arm is already on its way to the tape spot
+            FL.hold[1].set(); assert FL.alarm.wait(3)
+    FL.C.on_goto = on_goto
+    rec = FL.cycle(1, "")
+    assert rec["verdict"] == "reject" and not rec.get("unconfirmed") and "anomaly at grip 1, wp2-1" in rec["reason"]
+    assert photos(log) == ["wp2-1", "wp2-2", "wp2-3"]                  # the arm had gone on taking photos
+    assert not [x for x in log if x[0] == "reclamp"] and not [x for x in log if x[0] == "goto" and x[1] == "tape_above"]
+    first = next(i for i, x in enumerate(log) if x[0] == "pick")
+    i = [k for k in opens(log) if k > first][0]
+    assert log[i - 1][:2] == ("goto", 2) and plate(log) == 2           # let go at the reject plate only
+    assert [x[1] for x in log if x[0] == "path"][-2][0] == "wp2_above"  # from where it stood: first back over WP2
+    assert FL.A.intr is None
+
+
+def test_background_doubt_goes_back_for_the_careful_look_then_carries_on(tmp_path):
+    FL, T, log = make_async(tmp_path, {2: "uncertain"})
+    seq = ["clean"]                                                    # the careful look at that pose finds it clean
+    def shot(brick, view, idx):
+        log.append(("photo2", view)); return {"view": view, "file": "x.png", "ok": True, "cut": False, "why": None}
+    def judge(p, brick, model, t_low, t_high):
+        p["verdict"] = seq.pop(0) if seq else "clean"; p["reason"] = p["verdict"]; return p
+    FL.shot, FL.judge = shot, judge
+    rec = FL.cycle(1, "")
+    assert rec["verdict"] == "accept" and [x[1] for x in log if x[0] == "photo2"] == ["wp2-2"]
+    st = rec["steps"][1]
+    assert st["view"] == "wp2-2" and st["looked_again"] and [p["verdict"] for p in st["shots"]] == ["uncertain", "clean"]
+
+
+def test_background_doubt_that_stays_is_rejected_unconfirmed(tmp_path):
+    FL, T, log = make_async(tmp_path, {4: "uncertain"})               # the photo after the first re-clamp
+    def shot(brick, view, idx): return {"view": view, "file": "x.png", "ok": True, "cut": False, "why": None}
+    def judge(p, brick, model, t_low, t_high): p["verdict"] = "uncertain"; p["reason"] = "model score 0.70 between"; return p
+    FL.shot, FL.judge = shot, judge
+    rec = FL.cycle(1, "")
+    assert rec["verdict"] == "reject" and rec["unconfirmed"] and rec["reclamps"] == 1 and plate(log) == 2
+
+
+def test_nothing_is_set_down_or_let_go_before_every_verdict_is_in(tmp_path):
+    FL, T, log = make_async(tmp_path, {})
+    FL.hold[3] = threading.Event()                                     # photo 3 is still being judged ...
+    threading.Timer(0.4, FL.hold[3].set).start()
+    seen = {}
+    orig = T.regrip_vision
+    def regrip(g_lock, k, **kw):
+        seen.setdefault("held_back", not FL.hold[3].is_set()); return orig(g_lock, k, **kw)
+    T.regrip_vision = regrip
+    rec = FL.cycle(1, "")
+    assert rec["verdict"] == "accept" and seen["held_back"] is False    # ... so the re-clamp waited for it

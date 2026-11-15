@@ -35,6 +35,14 @@ A doubt is photographed again (cfg retakes); a doubt that stays goes where cfg u
 No block in the photo (no colour mask) after the retakes = the block is not in the jaws: the cycle is aborted,
 nothing is put on a plate.
 
+Judging in the background (cfg async_judge, on by default; POST /flow/cfg?async_judge=0 goes back to waiting).
+At a photo pose the arm only waits for the frames (settle + about 0.5 s). Mask, crop, files and the model score
+run in a worker thread while the arm already moves to the next pose, out of WP2 and toward the tape spot (or,
+after the last showing, toward the accept plate). A result that is not clean interrupts the move under way:
+an anomaly -> straight to the reject plate from where the arm stands; a doubt, a block cut by the frame or no
+block seen -> back to that pose for the careful look (retakes, re-posing), then on. Every result is in before
+the block is set down for a re-clamp or let go at a plate.
+
 Motion. The arm stands still only where something happens: for a photo, on the tape spot, at the plate, and at
 the pick. Everything in between is one blended move through its clearance poses (Collector.path / arm.Arm.path):
 WP1 -> above WP2 -> photo pose;  photo pose -> above WP2 -> above the tape spot;  photo pose -> above WP2 ->
@@ -52,6 +60,7 @@ re-clamp or the plate - holding the block; the move that is under way finishes f
 Log: runs/flow_<time>/log.jsonl (one line per block: verdict, reason, every photo with score and times).
 """
 import inspect as _inspect
+import concurrent.futures as _cf
 import json, threading, time
 from datetime import datetime
 from pathlib import Path
@@ -63,7 +72,7 @@ import autocollect as ac
 import feed
 import policy as pol
 import prep
-from arm import BODY, Stopped
+from arm import BODY, Interrupted, Stopped
 
 HERE = Path(__file__).resolve().parent
 PLATE_SLOTS = ("plate_a", "plate_b")     # taught on the dev Waypoints page (section Plates); optional <slot>_above
@@ -90,7 +99,7 @@ class Flow:
         self.S, self.A, self.ctx, self.C, self.T, self.F, self.AC, self.DATA = S, A, ctx, C, T, F, AC, DATA
         self.cfg_path = HERE / "flow_settings.json"
         self.cfg = {"accept": "plate_a", "reject": "plate_b", "max_reclamps": 4, "retakes": 1,
-                    "uncertain_to": "reject", "side_view": ""}
+                    "uncertain_to": "reject", "side_view": "", "async_judge": True}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
         if self.cfg["accept"] not in PLATE_SLOTS:                  # settings from before the plates had their own slots
@@ -100,6 +109,8 @@ class Flow:
         self.pause = threading.Event(); self.paused = False        # pause asked for / the arm is standing at a gate
         self.g_lock = None                                         # clamp command while a block is (thought to be) held
         self.exit_via = []                                         # poses to fly through to get out of WP2 (set by show)
+        self.alarm = threading.Event()                             # a background photo was not clean (interrupts the move)
+        self.pool = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="judge")   # one at a time, in order
         self.lift_mem = {}                                         # (block, pose, re-clamped?) -> extra mm that put it in the frame
         self.totals = {"accept": 0, "reject": 0, "aborted": 0}
 
@@ -138,12 +149,40 @@ class Flow:
             F.lift = old
 
     # ------------------------------------------------------------------ one photo -> verdict
+    def grab(self):
+        """The still frames of one photo; the arm must stand still for this (about 0.5 s): the averaged colour frame,
+        the depth of that moment and the joints. Everything after it (mask, crop, files, score) needs no arm."""
+        S = self.S; shots = S.averaged(["front"]); cam = S.cams["front"]
+        dep = getattr(cam, "depth", None)
+        if dep is not None and time.time() - getattr(cam, "depth_t", 0) >= 1.0: dep = None
+        return {"shots": shots, "depth": {"front": None if dep is None else dep.copy()},
+                "joints": {n: int(x) for n, x in self.A.pos.items()}}
+
+    def snap(self, brick, view, idx, model, t_low, t_high):
+        """Photo for the background judge: settle, grab the frames -> a function that turns them into the judged
+        photo record (run by the worker thread while the arm moves on)."""
+        T, F = self.T, self.F
+        F.settle(); T.check(); prep.configure_inhand(brick=brick)
+        t0 = time.perf_counter(); g = self.grab(); g_ms = round((time.perf_counter() - t0) * 1000, 1)
+        def finish():
+            t1 = time.perf_counter(); recs = []
+            nf = self.ctx.capture(["front"], "test", brick, view, idx, self.session, shots=g["shots"], depth=g["depth"],
+                                  joints=g["joints"], out=recs) if "front" in g["shots"] else 0
+            p = self._photo(brick, view, nf, recs[0] if recs else {}, t1); p["grab_ms"] = g_ms
+            return self.judge(p, brick, model, t_low, t_high)
+        return finish
+
     def shot(self, brick, view, idx):
         T, F = self.T, self.F
         F.settle(); T.check(); prep.configure_inhand(brick=brick)
         t0 = time.perf_counter()
         nf = self.ctx.capture(["front"], "test", brick, view, idx, self.session)
         rec = next((m for m in reversed(F._last_meta(3)) if m.get("cam") == "front"), {}) if nf else {}
+        return self._photo(brick, view, nf, rec, t0)
+
+    def _photo(self, brick, view, nf, rec, t0):
+        """Photo record from what ctx.capture wrote (meta record `rec`): is a block there, is it cut by the frame."""
+        F = self.F
         dep = rec.get("depth") if isinstance(rec.get("depth"), dict) else {}
         area = dep.get("area_px")
         ok = bool(nf) and bool(dep) and (area or 0) >= max(ac.MIN_AREA, feed.MIN_AREA.get(brick, 0))
@@ -221,6 +260,84 @@ class Flow:
             st = fn(w["name"], nudge)
             if st["verdict"] != "clean": bad = st; break
         return bad
+
+    def _judge_job(self, finish):
+        """Worker thread: one photo -> judged record. Anything but 'clean' raises the alarm, which cuts the arm's
+        current move short (arm.Arm.intr)."""
+        try: p = finish()
+        except Exception as e:
+            p = {"view": None, "file": None, "ok": False, "cut": False, "why": f"photo could not be judged: {e}",
+                 "verdict": "uncertain", "reason": f"photo could not be judged: {e}"}
+        if p.get("verdict") != "clean": self.alarm.set()
+        return p
+
+    def show_async(self, wp1, wp2, views, g_lock, grip, idx, model, t_low, t_high, onward, steps, lenient):
+        """The showing without waiting for the judge (the user, 2026-11-15): the arm stops at each photo pose only
+        for the frames (settle + about 0.5 s), hands them to the worker thread and moves on at once - to the next
+        pose, then out of WP2 toward `onward` (above the tape spot, or above the accept plate after the last
+        showing). The worker masks, crops, saves and scores meanwhile.
+        A result that is not clean sets self.alarm, which interrupts whatever move is under way; the arm holds.
+          anomaly  -> returned at once: the caller takes the block to the reject plate from where it stands.
+          doubt / block cut by the frame / no block seen -> back to that pose and the careful look there
+            (flow.look: retakes, moving a cut block into the frame); clean after that -> the flow carries on.
+        Every result is in before this returns, so nothing is set down or let go on an unjudged photo.
+        -> the step that stopped it (or None = all clean)."""
+        C, A = self.C, self.A; brick = self.brick_now
+        above = C.above_wp2(wp1, wp2[0]["pos"])[0]; jobs = []; at = None; left = False
+        def pose_of(w, lift):
+            if not lift: return w["pos"]
+            try: return next(x for x in self.poses(brick, {w["name"]: lift}) if x["name"] == w["name"])["pos"]
+            except Exception: return w["pos"]
+        self.alarm.clear(); A.intr = self.alarm
+        try:
+            for w in wp2:
+                if w["name"] not in views: continue
+                if self.alarm.is_set(): raise Interrupted()
+                lift = float(self.lift_mem.get((brick, w["name"], grip > 1), 0.0)); pose = pose_of(w, lift)
+                if at is None: C.path([above, pose], gripper=g_lock)
+                else: C.goto(pose, C.cfg["speed"] * 0.6, gripper=g_lock)
+                at = w; self.exit_via = ([] if w is wp2[0] else [wp2[0]["pos"]]) + [above]
+                self.T.check(); self.gate(); self.T.state = "inspect"
+                self.T.say(f"block {idx}: grip {grip}, {w['name']}, photo (judged while the arm moves on)")
+                jobs.append((w, lift, self.pool.submit(self._judge_job, self.snap(brick, w["name"], idx, model, t_low, t_high))))
+            if onward and at is not None:
+                left = True; C.path(self.exit_via + list(onward), gripper=g_lock); self.exit_via = []
+        except Interrupted:
+            if left: self.exit_via = [above]         # somewhere between WP2 and `onward`: first back over WP2
+        finally:
+            A.intr = None
+        for w, lift, fut in jobs:
+            p = fut.result(timeout=60)
+            st = {"grip": grip, "view": w["name"], "verdict": p["verdict"], "reason": p["reason"], "score": p.get("score"),
+                  "foreign": p.get("foreign"), "lift_mm": lift, "shots": [p], "background": True}
+            if p["verdict"] in ("clean", "defect"):
+                steps.append(st)
+                if p["verdict"] == "defect": return st
+                continue
+            # doubt: back to that pose, the careful look there
+            self.alarm.clear()
+            via = self.exit_via if self.exit_via and self.exit_via[-1] is above else self.exit_via + [above]
+            C.path(via + [pose_of(w, lift)], gripper=g_lock)
+            self.exit_via = ([] if w is wp2[0] else [wp2[0]["pos"]]) + [above]
+            def nudge(mm, w=w):
+                try: pose = next(x for x in self.poses(brick, {w["name"]: mm}) if x["name"] == w["name"])["pos"]
+                except Exception: return False
+                C.goto(pose, C.cfg["speed"] * 0.6, gripper=g_lock); return True
+            st = self.look(brick, w["name"], grip, idx, model, t_low, t_high, nudge)
+            st["shots"] = [p] + st["shots"]; st["looked_again"] = True
+            if st["verdict"] == "uncertain" and lenient: st["verdict"], st["passed_doubt"] = "clean", True
+            steps.append(st)
+            if st["verdict"] != "clean": return st
+        return None
+
+    def plate_poses(self, which):
+        """(above, release pose, letter) of the plate assigned to 'accept' | 'reject'."""
+        C = self.C; slot = self.cfg[which]; tgt = C.slot(slot); L = slot[-1].upper()
+        if not tgt: raise RuntimeError(f"teach plate {L} first (dev Waypoints page)")
+        p = tgt[0]["pos"]; wp1 = C.wps("wp1")[0]["pos"]; ab = C.slot(slot + "_above")
+        above = ab[0]["pos"] if ab else {**p, "shoulder_lift": wp1["shoulder_lift"], "elbow_flex": wp1["elbow_flex"],
+                                          "wrist_flex": wp1["wrist_flex"]}
+        return above, p, L
 
     def reclamp(self, g_lock, k, sign):
         """Re-clamp from where the arm stands (above WP2) and end above WP2 again, ready for the next showing."""
@@ -304,7 +421,14 @@ class Flow:
                 return out("reject", f"anomaly at grip {st['grip']}, {st['view']}: {st['reason']}")
             return out("reject", f"not confirmed clean at grip {st['grip']}, {st['view']}: {st['reason']}", unconfirmed=True)
 
-        bad = self.show(wp1, wp2, [w["name"] for w in wp2], g_lock, step)          # first showing: all angles
+        def showing(views, onward):
+            if self.cfg.get("async_judge"):
+                return self.show_async(wp1, wp2, views, g_lock, k + 1, idx, model, t_low, t_high, onward, steps, lenient)
+            return self.show(wp1, wp2, views, g_lock, step)
+        try: to_tape = [C.tape_poses()[0]]
+        except Exception: to_tape = []
+
+        bad = showing([w["name"] for w in wp2], to_tape)                           # first showing: all angles
         if bad: return rejected(bad)
         while not need <= sides:
             if k >= int(self.cfg["max_reclamps"]):
@@ -329,7 +453,8 @@ class Flow:
                 need = {0, 180}; hidden = info.get("hidden") or "two sides stay under the fingers"   # sides are never shown
             elif sign is None: sign = 1 if turn > 0 else -1
             cum = (cum + turn) % 360
-            bad = self.show(wp1, wp2, [side], g_lock, step)                       # after a re-clamp: the side only
+            last = need <= (sides | {cum})           # the last showing heads for the accept plate, the others for the tape spot
+            bad = showing([side], [self.plate_poses("accept")[0]] if last else to_tape)   # after a re-clamp: the side only
             if bad: return rejected(bad)
             sides.add(cum); self.cur["sides"] = len(sides); self.cur["sides_need"] = len(need)
         if hidden:                                   # the user's rule: a face no showing can reveal is not counted against it
@@ -462,7 +587,8 @@ def make_router(S, A, ctx, C, T, F, AC, DATA):
         time.sleep(0.1); return {**FL.status(), "started": True}
 
     @r.post("/flow/cfg")
-    def cfg(accept: str = "", uncertain_to: str = "", max_reclamps: int = -1, retakes: int = -1, side_view: str = None):
+    def cfg(accept: str = "", uncertain_to: str = "", max_reclamps: int = -1, retakes: int = -1, side_view: str = None,
+            async_judge: int = -1):
         """accept = the plate that takes the clean blocks (plate_a | plate_b); the other one takes the rejected ones."""
         if FL.running: return {**FL.status(), "msg": "not while the flow runs", "ok": False}
         if accept in PLATE_SLOTS:
@@ -471,6 +597,7 @@ def make_router(S, A, ctx, C, T, F, AC, DATA):
         if 3 <= max_reclamps <= 6: FL.cfg["max_reclamps"] = max_reclamps
         if 0 <= retakes <= 3: FL.cfg["retakes"] = retakes
         if side_view is not None: FL.cfg["side_view"] = side_view.strip()
+        if async_judge in (0, 1): FL.cfg["async_judge"] = bool(async_judge)      # 0 = wait for every verdict at the photo pose
         FL.save_cfg(); return FL.status()
 
     @r.post("/flow/pause")

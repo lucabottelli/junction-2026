@@ -946,6 +946,44 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Limits:** `edge_cut` only tests the top and bottom edges; in the photo the block also leaves the frame on the right, which a lift does not fix. A view of the green block held lengthwise is also new to the green model, so once it is in the frame it may still score high.
     - **Tests:** `tests/test_flow.py` 21/21 (new: a cut block is moved into the frame and accepted, the lift is reused on the later showings; a cut block that can't be moved is still rejected). Not run on the arm.
 
+44. **Green always turns 180° on a re-clamp; blended moves through the clearance poses** (2026-11-15 ≈08:59–09:13, the user's two requests; intel-43). **Loaded on the server (start 09:13:28, commit `a158b46`); no block has run on it yet.**
+    - **Green 180°:** `sorter.regrip_turns()` decides the turn; `vpick.LONG_BRICKS = {"green"}` makes green non-square whatever the top camera measured (its outline read as square in the 08:51 run and it was turned 90°). Non-square → 180°, opening = the width the pick held. Pink and blue unchanged. Loaded since the 09:10 restart.
+    - **The user: "remove the pauses between waypoints except for when it is capturing the images".** Every `goto` stopped at its waypoint and then waited for the joints to settle (0.1–1.5 s), also at pure clearance poses.
+    - **`arm.Arm.path(pts, speed)` + `Collector.path(poses, **override)`:** one time law over the whole way (the same `profile()` as `goto`, so "Fast moves" applies), the via points rounded over `CORNER` = 120 ticks before and after (the arm passes about 3.5° inside the corner instead of stopping on it), exact stop and the usual settle / BLOCKED test only at the last pose. For clearance poses only.
+    - **The flow uses it for every transfer:** WP1 → above WP2 → photo pose; last photo pose → above WP2 → above the tape spot; last photo pose → above WP2 → above the plate → plate; plate → above it → home. `flow.show` no longer leaves WP2 itself: it records the way out (`exit_via`) and the next move flies through it. Removed: the separate stop above WP2, the extra "home" move at the start of each block, the 0.3 s wait between blocks; the move between two photo poses is 0.6 instead of 0.4 of the speed.
+    - **Where the arm still stands still:** at each photo pose (settle before the photo), on the tape spot (set-down and re-grip, inside `regrip_vision`), at the plate (measured arrival, then release), and during the pick.
+    - **Tests:** `tests/test_flow.py` 24/24 (new: the path lists per block; `Arm.path` on a fake clock keeps moving through the via point, ends exactly, does not overshoot and is not faster than a single move; green 180° rule). The fast suite on the mock station ran through without a reported failure; I did not capture its count.
+    - **Not measured:** the time saved. Reference before the change: pink, 3 re-clamps, inspect 114.6 s, cycle 134.7 s (`runs/flow_20261115_090042`).
+    - **Risk on the first block:** the rounded corners cut about 3.5° inside each clearance pose, and the descents into WP2 and onto the plate are now the end of one move instead of a separate slow move.
+
+45. **Photos are judged in the background while the arm moves on; user page: block count 1–3, tinted plate pills, camera views without boxes** (2026-11-15 ≈09:20–09:35, the user's requests; intel-43). **Loaded on the server; no block has run on the background judge yet.**
+    - **The user: "the camera should keep capturing and the movements should go on, and not wait for the computation; if the computation says reject there should be an interrupt and it moves to the reject plate".**
+    - **What a photo cost before (runs of 09:00–09:21):** about 0.8 s at the pose (≈0.5 s for the 16 averaged frames, the rest mask, crop and files) plus 30–190 ms for the score.
+    - **Now (`flow.show_async`, cfg `async_judge`, on by default; `POST /flow/cfg?async_judge=0` = wait as before):**
+      - at the pose: settle + the frames only (`flow.grab`: averaged colour, the depth of that moment, the joints);
+      - a worker thread (one, in order) does mask, crop, files and the score (`arm.capture(..., shots=, depth=, joints=, out=)`, then `flow.judge`);
+      - the arm goes on at once: next pose, then out of WP2 toward the tape spot, or toward the accept plate after the last showing;
+      - a result that is not clean sets `flow.alarm`; `arm.Arm.intr` makes the running `goto` / `path` raise `arm.Interrupted` and the arm holds;
+      - anomaly → reject plate from where the arm stands (first back over WP2 if it had left it);
+      - doubt, block cut by the frame, no block seen → back to that pose and the careful look (`flow.look`: retakes, re-posing), then on;
+      - every result is collected before a re-clamp sets the block down and before a plate release.
+    - **Expected gain:** about 0.3–0.5 s per photo, a few seconds per block. Not measured.
+    - **Tests:** `tests/test_flow.py` 29/29 (new: a clean block is never held up; a late anomaly interrupts the move to the tape spot and ends at the reject plate; a doubt goes back, is cleared and the flow carries on; a doubt that stays is rejected; the re-clamp waits for a verdict that is still out); mock-station capture and motion tests 35 passed. **Not run on the station:** `capture` with frames grabbed earlier on the real camera. If it throws, the photo counts as a doubt and the arm goes back for the normal look.
+    - **Runs on the blended moves and the green rule (before this change), `runs/flow_20261115_091718` … `092121`:**
+      | Block | Verdict | Re-clamps | Inspect | Cycle |
+      |---|---|---|---|---|
+      | blue | accept, 4 sides clean | 3 | 94.4 s | 110.7 s |
+      | blue | reject: visible patch, 8 % of the block, 4th side | 3 | 96.3 s | 112.0 s |
+      | blue | reject: visible patch, 11 %, 4th side | 3 | 97.6 s | 143.6 s (pick 42.0 s) |
+      | green | accept: both ends clean, long sides not inspected | 1, turned 180° | 46.9 s | 65.3 s |
+      | pink | accept, 4 sides clean | 3 | 94.2 s | 112.9 s |
+      - Pink with three re-clamps: inspect 114.6 s before the blended moves (09:00), 94.2 s after: 20 s less.
+      - The last three were one run of three blocks ("start plate empty" ended it).
+    - **User page (`web/operator.html`):**
+      - Blocks: 1, 2, 3. With a colour chosen only 1 can be selected (three blocks, one per colour); with Any all three.
+      - Accept-plate switch: the accept plate's pill is tinted green, the other one slightly red.
+      - Camera views without the detection boxes: new `GET /view/<cam>` (`capture.py`: the frame before the boxes are drawn, 1280 px wide instead of 640). The dev pages keep `/snap/<cam>` with the boxes.
+
 ---
 
 ## 5. Issues and fixes log
@@ -1164,6 +1202,11 @@ Everything below was built and tested without hardware. Nothing has run on the r
 **Latency on the user page:** the status bar of `web/operator.html` now shows, for the last sorted block, inference ms + device, pick / inspect / sort / cycle seconds; the results list has an inference column. `flow.py` puts `t_pick_s`, `t_inspect_s`, `t_sort_s`, `infer_ms_mean`, `device` into `/flow/status` → `history`. Checked against stub data in headless Firefox only; the live server (started 08:48) needs a restart to send the new fields.
 **Power, temperature and device load on the user page (2026-11-15 ≈09:35):** new `anomaly_capture/telemetry.py` samples the same sysfs sources as the bench (`bench/sensors.py`) at 1 Hz: RAPL package / core / psys W, CPU package temperature and headroom to TjMax (100 °C), iGPU render-engine busy %, NPU busy %, CPU %. `GET /telemetry` (`?history=1` adds the last 2 min). The user page shows a "System" card in the sidebar (power with a 1-minute sparkline, temperature + headroom, iGPU / NPU / CPU bars); on screens under 880 px tall the label and sparkline drop out so Start and Stop stay visible. The flow now logs **`energy_j` per block** (package energy from start to end of the cycle) and the status bar shows it next to the cycle time. First live reading, idle station while EfficientAd trained on the iGPU: 21 W package, 38 W psys, 62 °C (38 °C headroom), iGPU 87 %, NPU 0 %.
 - **RAPL needs `sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj /sys/class/powercap/intel-rapl:*:*/energy_uj` after every reboot** (or the udev rule in `bench/sensors.RAPL_FIX_PERSIST`). Without it the power fields are null and the card shows "–"; temperature and loads still work.
+**EfficientAd on the NPU (2026-11-15 ≈09:50):** `models/front/pink_efficientad` (small, 256×256, 85 clean crops, 20 epochs, trained on the XPU in 474 s, exported to OpenVINO FP16). Raw OpenVINO, random input, LATENCY hint: **NPU 6.6 ms p50 / 11.0 p95** (compile 1.5 s), GPU 3.2 / 3.8 ms, CPU 83.4 / 89.0 ms. Through the run-time path (`score_worker.py`, 12 real pink crops × 2): **NPU 8.3 ms p50**, GPU 15.3 ms p50 (the GPU path feeds the full-size crop and resizes inside the graph).
+- **Fix: the NPU failed in the worker** (`ZE_RESULT_ERROR_INVALID_ARGUMENT`): the export has a dynamic `[1,3,?,?]` input and the NPU compiles static shapes only. `score_worker.npu_model()` now writes a sibling `model_static256x256.xml` (input fixed at the anomaly-map size) and the worker resizes each crop to 256×256 before inference, for the NPU only; CPU and GPU still get the untouched dynamic export.
+- **NPU vs GPU scores on the same 12 crops:** largest difference 0.027 (e.g. −0.309 vs −0.282); no crop changes side of 0.
+- **Not wired into the decision yet:** EfficientAd has no thresholds (no defect photos; clean-only would let a missed defect skip PatchCore), so the sort flow still judges with PatchCore on the GPU. Blue and green EfficientAd training started 09:50.
+
 
 ---
 

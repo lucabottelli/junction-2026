@@ -29,6 +29,9 @@ PLATE_HSV = ((3, 140, 80), (20, 255, 255))     # the orange plate (OpenCV H 0-18
 PLATE_HUE = (0, 23)                            # plate, its shadows and its glare all keep this hue
 MIN_SAT, MIN_VAL = 70, 45                      # below: glare (white) or noise, hue means nothing
 COLOURS = {"pink": (160, 180), "green": (24, 75), "blue": (85, 130)}     # hue classes; anything else = "other"
+SPOT_GREEN_MIN = 34                            # look at the re-clamp spot (detect(at=)): the yellow plate beside it has hue 22-32
+                                               # and read as green; the green block's top is 41-57 (flow 08:49: the block
+                                               # and the plate's rim were one 122 mm blob, the fetch closed on the rim 3x)
 PINK_MIN_SAT = 108                             # the salmon brick has S ~134; plate glare with a pink hue S 76-101
 MIN_SHORT_MM = 14.0                            # thinner than any brick face: a glare streak
 MIN_AREA_MM2, MAX_AREA_MM2 = 250.0, 4500.0     # a 2x2 seen from above is ~1000 mm2, a 2x4 ~2000
@@ -78,7 +81,7 @@ def detect(img, roi=None, mm_per_px=None, at=None):
             if at is not None: continue
             m = fg & ~np.any([(H >= a) & (H <= b) for a, b in COLOURS.values()], axis=0)
         else:
-            m = fg & (H >= lo) & (H <= hi)
+            m = fg & (H >= (max(lo, SPOT_GREEN_MIN) if at is not None and name == "green" else lo)) & (H <= hi)
             if name == "pink": m &= S >= PINK_MIN_SAT
         m = cv2.morphologyEx(m.astype(np.uint8) * 255, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))   # studs, highlights
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
@@ -264,9 +267,15 @@ REF_W = 0.032            # brick width the calibration's "TCP at the grasp" belo
 FIX_CLEAR = 0.009        # gap left between the fixed jaw and the brick: the moving jaw pushes the brick across it
 MOV_CLEAR = 0.014        # gap on the moving jaw's side when open
 SQUARE = 1.28            # long / short side below this: both jaw directions are tried
+LONG_BRICKS = {"green"}  # blocks that are NOT square whatever the camera measures (green = the 2x3, 48 x 32 mm): seen
+                         # at an angle or with a side face in the blob its outline can read below SQUARE
 TICKS_SHUT, TICKS_PER_M = 1930.0, 9700.0     # gripper ticks with the jaws shut on nothing; ticks per metre of gap
 MAX_GRASP_W = 0.052
 HOVER = 0.055            # m above the grasp point where the arm lines up before going down
+RG_HOVER_FAST = 0.038    # re-clamp with fast moves on: hover this far above the release height instead. The fingertips
+                         # are then ~42 mm above the table, ~18 mm over the studs of a block (24 mm high)
+RG_STEPS_FAST = 3        # ... and go down in 3 corrected steps of 14 mm instead of 6 of 10 mm
+RG_CLOSE_FAST = 0.5      # ... and close the jaws at this speed instead of 0.3 (what the fast pick uses)
 YAW_BIAS_DEG = -11.5     # FK jaw yaw minus the brick axis in 99 human grasps (median; IQR -17..-6): the model reads the jaws 11.5 deg off
 Z_SEEK = 0.012           # how far below the calibrated grasp height the descent may go looking for the plate (contact stops it)
 EMPTY_TICKS = 25         # fingers stopped fewer ticks than this above the closed end: nothing between them
@@ -639,6 +648,14 @@ class VisionPick:
         self.g_lock = g_lock
         return "held", info
 
+    def rg_quick(self):
+        """Re-clamp shortcuts on? They follow the fast-moves switch (sorter cfg motion_fast -> Collector.fast)."""
+        return bool(getattr(self.C, "fast", None))
+
+    def rg_hover(self):
+        """Height above the release point at which a re-clamp turns the jaws (also how far it rises after letting go)."""
+        return RG_HOVER_FAST if self.rg_quick() else HOVER
+
     def grasp_world(self, centre, z, yaw, width, tag="rg_", seek=0.004, turn=0.0):
         """Grip a brick whose place is known from the ARM'S OWN POSE, not from the camera (re-clamp on the tape spot,
         sorter.regrip_vision): centre = brick centre (model x, y), z = TCP height it was let go at, yaw = MODEL jaw
@@ -647,16 +664,18 @@ class VisionPick:
         -> ("held" | "empty" | "landed" | "dropped" | "unreachable", info); the clamp command is self.g_lock."""
         A, C, kin = self.A, self.C, self.kin; gmin, gmax = A.fl["gripper"]; lo, hi = A.fl["wrist_roll"]
         wrap = lambda a_: abs((a_ + math.pi) % (2 * math.pi) - math.pi)
+        quick = self.rg_quick(); hover = self.rg_hover()                               # fast moves: lower hover, 3 steps, quicker close
         ax = yaw - math.radians(self.calib.d.get("yaw_bias_deg", YAW_BIAS_DEG))        # where the jaws really point
         x = np.array([math.cos(ax), math.sin(ax), 0.0])
         p = np.array([centre[0], centre[1], z], np.float64) - (FIX_CLEAR + max(0.0, width - REF_W) / 2) * x
-        info = {"xyz": [round(float(v), 4) for v in p], "yaw_deg": round(math.degrees(yaw), 1), "width_mm": round(width * 1000, 1)}
+        info = {"xyz": [round(float(v), 4) for v in p], "yaw_deg": round(math.degrees(yaw), 1), "width_mm": round(width * 1000, 1),
+                "quick": quick, "hover_mm": round(hover * 1000)}
         # turn = how far the jaws turn from where they are (rad): the IK is also started with the wrist roll already
         # turned that way round or the other, since a 180 deg turn has two solutions and only one is inside the limits
         q0 = np.array(self._q_now()[:5], np.float64); ok = False
         for dr in (0.0, turn, -turn):
             qs = q0.copy(); qs[4] += dr
-            q_hover, e1 = kin.ik.solve(qs, p + [0, 0, HOVER], yaw, iters=80)
+            q_hover, e1 = kin.ik.solve(qs, p + [0, 0, hover], yaw, iters=80)
             q_low, e2 = kin.ik.solve(np.array(q_hover).copy(), p, yaw, iters=60)
             _, got, _ = kin.fk(q_hover); roll = kin.ticks(q_hover, 0)["wrist_roll"]
             if max(e1, e2) <= 0.004 and wrap(got - yaw) <= math.radians(12) and lo + 30 <= roll <= hi - 30: ok = True; break
@@ -667,9 +686,9 @@ class VisionPick:
         g_open = min(gmax, max(TICKS_SHUT + TICKS_PER_M * (width + FIX_CLEAR + MOV_CLEAR), gmin + 200))
         self._goto(q_hover, g_open, 1.0); off = self._servo_in(q_hover, g_open); self._settle()
         self._snap(f"{tag}hover")
-        q = q_hover; n = 6; touched = None; z_low = p[2] - seek; steps = []; info["dz_steps_mm"] = steps
+        q = q_hover; n = RG_STEPS_FAST if quick else 6; touched = None; z_low = p[2] - seek; steps = []; info["dz_steps_mm"] = steps
         for s in range(1, n + 1):
-            zz = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
+            zz = p[2] + hover + (z_low - p[2] - hover) * s / n
             q, _ = kin.ik.solve(q, np.array([p[0], p[1], zz]), yaw, iters=30)
             self._goto(q, g_open, 0.45, off); self._settle(0.5)
             tgt = kin.ticks(q, g_open)
@@ -685,7 +704,7 @@ class VisionPick:
             q, _ = kin.ik.solve(q, np.array([p[0], p[1], touched[0] + touched[1] + 0.002]), yaw, iters=30)
             self._goto(q, g_open, 0.3, off)
         tcp = kin.fk(self._q_now())[0]; info["tcp_err_mm"] = [round(v * 1000, 1) for v in (tcp - p)]
-        C.goto(dict(A.cmd), 0.3, gripper=gmin); time.sleep(0.15)
+        C.goto(dict(A.cmd), RG_CLOSE_FAST if quick else 0.3, gripper=gmin); time.sleep(0.15)
         g_stall = A.pos["gripper"]; info["g_stall"] = round(g_stall)
         if g_stall - gmin < EMPTY_TICKS:
             self._snap(f"{tag}shut")

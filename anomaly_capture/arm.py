@@ -45,6 +45,8 @@ TOL = 40             # ticks (~3.5 deg): "arrived" for body joints (P-gain 16 le
 BLOCKED = 160        # ticks (~14 deg): still this far off after settling = something is in the way -> stop
 TICK_PER_DEG = 4096 / 360
 FAST_VMAX = 1.5      # x VMAX: the most a fast-mode cruise may ask for (~195 deg/s)
+CORNER = 120         # ticks (~10 deg): Arm.path rounds each via point over this much travel before and after it; the
+                     # path then passes about 0.35 x this (~3.5 deg) inside the corner instead of stopping on it
 
 
 def profile(d, vmax, ramp=0.0, cruise=None):
@@ -52,7 +54,7 @@ def profile(d, vmax, ramp=0.0, cruise=None):
     Default: minimum jerk. Peak speed = vmax, mean = vmax / 1.875 (it never stays at its speed).
     ramp > 0 (fast mode): the speed rises smoothly to `cruise` ticks/s in `ramp` s (smoothstep: the acceleration
     starts and ends at 0, peak 1.5 * cruise / ramp), stays there, and falls the same way; T = d / cruise + ramp.
-    Used only when the move is long enough to reach the cruise speed and comes out shorter than minimum jerk:
+    Not for a move of the jaws alone (Arm.goto). Used only when the move is long enough to reach the cruise speed and comes out shorter than minimum jerk:
     short moves (the corrected steps of a pick, a set-down) keep the minimum-jerk law at their own speed."""
     T = max(0.25, 1.875 * d / vmax)
     v = cruise or vmax
@@ -248,6 +250,8 @@ class Arm:
         start = dict(self.cmd)
         d = max(abs(tgt[n] - start[n]) for n in JOINTS)
         scale, ramp = self.fast or (1.0, 0.0)
+        if max(JOINTS, key=lambda n: abs(tgt[n] - start[n])) == "gripper": ramp = 0.0     # closing / opening the jaws: they meet
+                                                                                          # the block at the eased speed, not at cruise
         T, f, vpk = profile(d, vmax, ramp, min(VMAX * FAST_VMAX, vmax * scale))
         self.vmax = vpk * 1.2                    # rate limiter slightly above the profile: never the bottleneck
         t0 = time.time()
@@ -257,6 +261,44 @@ class Arm:
             self.goal = {n: start[n] + (tgt[n] - start[n]) * m for n in JOINTS}
             if t >= T: break
             time.sleep(0.02)
+        return self._settle(tgt)
+
+    def path(self, pts, speed, corner=CORNER):
+        """Move through the poses `pts` WITHOUT stopping at the ones in between: one time law (profile()) over the
+        whole way, so the arm speeds up once, keeps moving through every via point and slows down once, into
+        pts[-1], where it settles like goto(). The via points are rounded (see CORNER): they are passed close by, not
+        hit, so use them for clearance poses (above a plate, above WP2), never for a pose where something happens.
+        The stop check runs every tick; BLOCKED is tested at the end."""
+        P = [dict(self.cmd)]
+        for p in pts:
+            q = {n: float(p[n]) for n in JOINTS}
+            if max(abs(q[n] - P[-1][n]) for n in JOINTS) >= 1: P.append(q)
+        if len(P) <= 2: return self.goto({n: float(pts[-1][n]) for n in JOINTS}, speed)
+        seg = [max(abs(P[i + 1][n] - P[i][n]) for n in JOINTS) for i in range(len(P) - 1)]
+        cum = [0.0]
+        for d in seg: cum.append(cum[-1] + d)
+        L = cum[-1]
+        def at(s):
+            s = min(L, max(0.0, s)); i = 0
+            while i < len(seg) - 1 and s > cum[i + 1]: i += 1
+            u = (s - cum[i]) / seg[i]
+            return {n: P[i][n] + (P[i + 1][n] - P[i][n]) * u for n in JOINTS}
+        vmax = max(50.0, VMAX * speed); scale, ramp = self.fast or (1.0, 0.0)
+        T, f, vpk = profile(L, vmax, ramp, min(VMAX * FAST_VMAX, vmax * scale))
+        self.vmax = vpk * 1.2
+        t0 = time.time()
+        while True:
+            self._check()
+            t = time.time() - t0; s = L * f(t); r = min(corner, s, L - s)
+            a, b, c = at(s - r), at(s), at(s + r)
+            self.goal = {n: (a[n] + 2 * b[n] + c[n]) / 4 for n in JOINTS}
+            if t >= T: break
+            time.sleep(0.02)
+        self.goal = dict(P[-1])
+        return self._settle(P[-1])
+
+    def _settle(self, tgt):
+        """Wait for the arm at the end of a move -> largest body-joint error (ticks). Raises BLOCKED."""
         # settle: body joints within TOL and gripper stopped moving (it stalls on the brick when closing)
         t1, lastg, e = time.time(), None, 0
         while time.time() - t1 < 1.5:

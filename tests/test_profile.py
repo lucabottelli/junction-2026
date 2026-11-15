@@ -70,3 +70,31 @@ def test_collector_hands_fast_mode_to_the_arm_per_move(tmp_path):
     assert A.seen[1] == (0.8, (pytest.approx(1.25), 0.4))              # on: a move at cfg speed cruises at the target
     assert A.seen[2] == (pytest.approx(0.24), (pytest.approx(1.25), 0.4))   # a gentle move keeps its ratio to it
     assert A.fast is None                                              # never left on for moves that bypass the collector
+
+
+def test_spot_look_does_not_merge_a_green_block_with_the_yellow_plate():
+    """flow 2026-11-15 08:49: the green block lay against the yellow plate, whose rim read as green; block and rim
+    were one 122 mm blob and the fetch closed on the rim three times."""
+    import cv2, numpy as np
+    import vpick as vp
+    hsv = np.zeros((600, 800, 3), np.uint8); hsv[:] = (15, 90, 150)                       # wood: the plate's hue
+    cv2.circle(hsv, (560, 380), 190, (28, 110, 170), -1)                                  # yellow plate
+    cv2.rectangle(hsv, (330, 250), (382, 346), (54, 95, 155), -1)                         # green block, touching it
+    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    got = vp.detect(img, mm_per_px=0.5, at=(300, 300, 200))[0]
+    assert [b["colour"] for b in got] == ["green"]
+    (u, v), (lg, sh) = got[0]["c"], got[0]["size"]
+    assert abs(u - 356) < 4 and abs(v - 298) < 4 and abs(lg * 0.5 - 48) < 4 and abs(sh * 0.5 - 26) < 4
+
+
+def test_jaws_alone_never_cruise():
+    """Closing / opening the jaws keeps the eased law in fast mode (they meet the block at the eased speed); the same
+    distance on a body joint cruises."""
+    import time
+    import arm
+    def run(joint):
+        A = arm.Arm(); A.cmd = {n: 2000.0 for n in arm.JOINTS}; tgt = dict(A.cmd); tgt[joint] += 700
+        A.pos = dict(tgt); A.fast = (1.25, 0.4); t0 = time.time(); A.goto(tgt, 0.5); return time.time() - t0
+    T_mj = 1.875 * 700 / 750
+    assert run("gripper") >= T_mj                              # minimum jerk at its own speed
+    assert run("shoulder_pan") < T_mj - 0.3                    # 700 / 937 + 0.4 s (+ the settle)

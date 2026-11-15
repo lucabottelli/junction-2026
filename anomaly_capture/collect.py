@@ -209,6 +209,21 @@ class Collector:
         try: return self.A.goto(tgt, speed or self.cfg["speed"])
         finally: self.A.fast = None
 
+    def path(self, poses, speed=None, **override):
+        """Like goto() to poses[-1], but THROUGH the poses before it without stopping (arm.Arm.path): for clearance
+        poses on the way. The override (gripper=...) applies to every pose."""
+        pts = []
+        for pos in poses:
+            tgt = {k: float(v) for k, v in pos.items()}; tgt.update(override)
+            for n in JOINTS:
+                lo = (getattr(self.A, "g_floor", None) or self.A.fl[n][0]) if n == "gripper" else self.A.fl[n][0]
+                tgt[n] = min(self.A.fl[n][1], max(min(lo, self.A.fl[n][0]), tgt[n]))
+            pts.append(tgt)
+        self._tgt = pts[-1]
+        self.A.fast = (self.fast[0] / self.cfg["speed"], self.fast[1]) if self.fast else None
+        try: return self.A.path(pts, speed or self.cfg["speed"])
+        finally: self.A.fast = None
+
     def hold_here(self):
         """Stop following the leader; keep the commanded gripper (= keep squeezing the brick)."""
         with self.A.io:

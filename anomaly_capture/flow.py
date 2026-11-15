@@ -35,6 +35,11 @@ A doubt is photographed again (cfg retakes); a doubt that stays goes where cfg u
 No block in the photo (no colour mask) after the retakes = the block is not in the jaws: the cycle is aborted,
 nothing is put on a plate.
 
+Motion. The arm stands still only where something happens: for a photo, on the tape spot, at the plate, and at
+the pick. Everything in between is one blended move through its clearance poses (Collector.path / arm.Arm.path):
+WP1 -> above WP2 -> photo pose;  photo pose -> above WP2 -> above the tape spot;  photo pose -> above WP2 ->
+above the plate -> plate;  plate -> above it -> home.
+
 The clamp. From the pick on, every move carries the clamp command of the grip. It opens in exactly two places:
 on the tape spot inside a re-clamp (the block is gripped again there), and at plate A or B, after the measured
 arm stands at the taught plate pose (Flow.drop). An arm that does not reach the plate keeps the block and the
@@ -67,6 +72,15 @@ NUDGE_MM, NUDGE_MAX = 20.0, 4    # a block cut by the frame: move the photo pose
 AT_PLATE = 60              # ticks (~5 deg): every arm joint this close to the taught plate pose = "at the plate"
 
 
+
+def _energy():
+    """Package energy counter (J) from telemetry.py; None when RAPL is not readable or telemetry is not loaded."""
+    try:
+        import telemetry
+        return telemetry.energy_j()
+    except Exception:
+        return None
+
 class NotHeld(Exception):
     """No block in the jaws at a photo pose."""
 
@@ -85,6 +99,7 @@ class Flow:
         self.running = False; self.session = None; self.cur = {}; self.history = []
         self.pause = threading.Event(); self.paused = False        # pause asked for / the arm is standing at a gate
         self.g_lock = None                                         # clamp command while a block is (thought to be) held
+        self.exit_via = []                                         # poses to fly through to get out of WP2 (set by show)
         self.lift_mem = {}                                         # (block, pose, re-clamped?) -> extra mm that put it in the frame
         self.totals = {"accept": 0, "reject": 0, "aborted": 0}
 
@@ -188,25 +203,23 @@ class Flow:
 
     # ------------------------------------------------------------------ motions
     def show(self, wp1, wp2, views, g_lock, fn):
-        """To WP2 (over the pose above it), fn(pose name) at every pose in `views` until one is not clean, then
-        straight back UP to the pose above WP2. It stays there: the next step (re-clamp or plate) leaves from it.
-        No detour over WP1 between the steps (the user, 2026-11-15). -> the step that stopped it (or None = all clean)."""
-        C = self.C; at = wp2[0]; bad = None
-        C.to_wp2(wp1, wp2, g_lock)
-        try:
-            for w in wp2:
-                if w["name"] not in views: continue
-                if w is not at: C.goto(w["pos"], C.cfg["speed"] * 0.4, gripper=g_lock); at = w
-                def nudge(mm, w=w):
-                    try: pose = next(x for x in self.poses(self.brick_now, {w["name"]: mm}) if x["name"] == w["name"])["pos"]
-                    except Exception: return False
-                    C.goto(pose, C.cfg["speed"] * 0.4, gripper=g_lock); return True
-                st = fn(w["name"], nudge)
-                if st["verdict"] != "clean": bad = st; break
-        finally:
-            if not (self.T.stop_flag.is_set() or self.A.stop.is_set()):       # leave WP2 the way it came in
-                if at is not wp2[0]: C.goto(wp2[0]["pos"], C.cfg["speed"] * 0.4, gripper=g_lock)
-                C.up_wp2(wp1, wp2, g_lock)
+        """Into WP2 in ONE move (through the pose above it, no stop there), fn(pose name, nudge) at every pose in
+        `views` until one is not clean. The arm STAYS at the last photo pose: the way out (self.exit_via: back to the
+        first pose if it moved on, then the pose above WP2) is flown through by the next move (re-clamp or plate), so
+        there is no stop above WP2 and no detour over WP1 (the user, 2026-11-15). The arm stands still only for the
+        photos. -> the step that stopped it (or None = all clean)."""
+        C = self.C; above = C.above_wp2(wp1, wp2[0]["pos"])[0]; at = None; bad = None
+        for w in wp2:
+            if w["name"] not in views: continue
+            if at is None: C.path([above, w["pos"]], gripper=g_lock)
+            else: C.goto(w["pos"], C.cfg["speed"] * 0.6, gripper=g_lock)
+            at = w; self.exit_via = ([] if w is wp2[0] else [wp2[0]["pos"]]) + [above]
+            def nudge(mm, w=w):
+                try: pose = next(x for x in self.poses(self.brick_now, {w["name"]: mm}) if x["name"] == w["name"])["pos"]
+                except Exception: return False
+                C.goto(pose, C.cfg["speed"] * 0.6, gripper=g_lock); return True
+            st = fn(w["name"], nudge)
+            if st["verdict"] != "clean": bad = st; break
         return bad
 
     def reclamp(self, g_lock, k, sign):
@@ -215,6 +228,9 @@ class Flow:
         kw = {"sign": sign} if sign and "sign" in pr else {}
         if "end" in pr:
             wp1 = C.wps("wp1")[0]["pos"]; kw["end"] = C.above_wp2(wp1, self.wp2_now[0]["pos"])[0]
+        if self.exit_via:                            # out of WP2 and over to the tape spot in one move
+            try: C.path(self.exit_via + [C.tape_poses()[0]], gripper=g_lock)
+            finally: self.exit_via = []
         return T.regrip_vision(g_lock, k, **kw)
 
     at_wait = 2.5
@@ -241,14 +257,14 @@ class Flow:
                                           "wrist_flex": wp1["wrist_flex"]}
         T.state = "sort_good" if which == "accept" else "sort_defect"
         T.say(f"block → plate {L} ({which})")
-        C.goto(above, gripper=g_lock)
-        C.goto(p, C.cfg["speed"] * 0.5, gripper=g_lock)
+        via, self.exit_via = self.exit_via, []
+        C.path(via + [above, p], gripper=g_lock)          # out of WP2, over the plate and down in one move
         ok, e = self.at(p)
         if not ok:
             raise RuntimeError(f"the arm did not reach plate {L} ({e / AT_PLATE * 5:.0f}° off): clamp kept closed, block still held")
-        C.goto(dict(A.cmd), 1.0, gripper=g_open); time.sleep(0.25)       # the only release of a sorted block
+        C.goto(dict(A.cmd), 1.0, gripper=g_open); time.sleep(0.2)        # the only release of a sorted block
         self.g_lock = None
-        C.goto(above, C.cfg["speed"] * 0.6, gripper=g_open)
+        C.path([above, C.wps("home")[0]["pos"]], gripper=g_open)         # up and home in one move
 
     def clear_gripper(self, g_open):
         """Before a run: a closed clamp may still hold a block (a run that was stopped). The first move of a pick
@@ -260,7 +276,7 @@ class Flow:
         g = A.cmd["gripper"]; wp1 = C.wps("wp1")[0]["pos"]
         T.state = "sort_defect"; T.say("the clamp is closed: taking whatever it holds to the reject plate first")
         C.rise(wp1); C.goto(wp1, gripper=g)
-        self.drop("reject", g, g_open); C.goto(C.wps("home")[0]["pos"], gripper=g_open)
+        self.exit_via = []; self.drop("reject", g, g_open)
         return True
 
     # ------------------------------------------------------------------ one block
@@ -325,9 +341,9 @@ class Flow:
         home = C.wps("home")[0]["pos"]; g_open = T.g_open()
         self.cur = {"block": idx, "steps": [], "grip": 1, "sides": 0, "verdict": None}
         t0 = time.perf_counter(); brick = colour or None; self.g_lock = None
+        e0 = _energy(); self.exit_via = []
         self.gate()
         if self.A.mode != "hold": self.A.set_mode("hold", force=True)
-        C.goto(home, gripper=g_open)
         T._vopt = {"target": colour or None, "retries": 3}                        # a failed pick is tried again
         try:
             g_lock = T.pick_vision()
@@ -356,7 +372,7 @@ class Flow:
                 res = {"verdict": "aborted", "reason": str(e), "steps": self.cur.get("steps", []), "lost": True}
                 if self.g_lock is not None:
                     self.drop("reject", self.g_lock, g_open); res["released_at"] = self.cfg["reject"]
-            C.goto(home, gripper=g_open)
+            if res["verdict"] == "aborted" and not res.get("released_at"): C.goto(home, gripper=g_open)   # drop() ends at home
         t3 = time.perf_counter(); res.pop("g_lock", None)
         infer = [s["infer_ms"] for st in res["steps"] for s in st["shots"] if s.get("infer_ms") is not None]
         rec = {"block": idx, "time": datetime.now().isoformat(timespec="seconds"), "brick": brick, **res,
@@ -364,13 +380,15 @@ class Flow:
                "t_pick_s": round(t1 - t0, 1), "t_inspect_s": round(t2 - t1, 1), "t_sort_s": round(t3 - t2, 1),
                "t_cycle_s": round(t3 - t0, 1), "infer_ms_mean": round(sum(infer) / len(infer), 1) if infer else None,
                "device": T.cfg["device"]}
+        e1 = _energy()
+        rec["energy_j"] = round(e1 - e0, 1) if e0 is not None and e1 is not None else None
         self.cur["verdict"] = res["verdict"]
         if res["verdict"] != "empty":
             with open(T.RUNS / self.session / "log.jsonl", "a") as f: f.write(json.dumps(rec) + "\n")
             self.totals[res["verdict"]] = self.totals.get(res["verdict"], 0) + 1
             self.history = ([{k: rec.get(k) for k in ("block", "brick", "verdict", "reason", "plate", "photos", "reclamps",
                                                       "t_cycle_s", "t_pick_s", "t_inspect_s", "t_sort_s", "infer_ms_mean",
-                                                      "device")}] + self.history)[:20]
+                                                      "device", "energy_j")}] + self.history)[:20]
             T.say(f"block {idx} ({brick}): {res['verdict'].upper()} - {res['reason']} ({rec['t_cycle_s']} s)", res["verdict"] != "aborted")
         return rec
 
@@ -385,6 +403,7 @@ class Flow:
         self.totals = {"accept": 0, "reject": 0, "aborted": 0}; self.history = []; aborted = 0; end = ""
         try:
             if A.mode != "hold": A.set_mode("hold", force=True)
+            if hasattr(T, "apply_motion"): T.apply_motion()           # the "Fast moves" switch (sorter cfg motion_fast)
             self.clear_gripper(T.g_open())
             for i in range(1, n + 1):
                 rec = self.cycle(i, colour)
@@ -392,7 +411,6 @@ class Flow:
                 aborted = aborted + 1 if rec["verdict"] == "aborted" else 0
                 if rec.get("on_spot") or aborted >= 2:
                     raise RuntimeError(f"needs a hand: {rec['reason']}")
-                time.sleep(0.3)
             t = self.totals
             T.state = "done"; T.say(f"✓ DONE: {t['accept']} accepted, {t['reject']} rejected, {t['aborted']} aborted{end} · log: runs/{self.session}")
         except Stopped:

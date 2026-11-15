@@ -87,6 +87,25 @@ def thresholds_from(good, defect_episode_max):
             "good_uncertain_share": round(float((g > t_low).mean()), 3), "auroc": auroc(g, vis)}
 
 
+def regrip_turns(colour, size, w_held, regrip_long=False, sign=None, square_ratio=1.28, long_bricks=("green",)):
+    """How a re-clamp turns the block -> (jaw opening for the new grip in mm, turns to try in order, deg).
+    Square block: 90 deg (+90 first, -90 if that is out of reach; `sign` = +1 / -1 allows only that one).
+    Block that is not square: 180 deg. It is NOT gripped along its long side: the jaws then press on the two small
+    ends and the block squirts out sideways (07:57 run: held once, pushed away twice). It is gripped the same way
+    again with the opposite end toward the camera; its two long sides stay under the fingers.
+    Not square = its colour is a known long block (vpick.LONG_BRICKS: green is the 2x3) OR the camera measured it
+    long. The colour rule is there because the measured outline alone misjudged a green block as square (08:51 run:
+    turned 90 deg, held lengthwise, cut by the photo frame, rejected although clean).
+    size = (long, short) mm from the pick's look; w_held = the width the pick gripped across."""
+    square = colour not in long_bricks and size[0] / max(1e-6, size[1]) < square_ratio
+    if square: other, turns = min(40.0, max(30.0, w_held)), (90, -90)
+    elif regrip_long: other, turns = (size[0] if abs(w_held - size[1]) <= abs(w_held - size[0]) else size[1]), (90, -90)
+    else:                                   # same pair of faces again; a pick that took it lengthwise (> 42 mm) keeps that opening
+        other, turns = (w_held if w_held > 42.0 else min(40.0, max(30.0, w_held))), (180,)
+    if sign in (1, -1) and turns != (180,): turns = (90 * sign,)
+    return other, turns
+
+
 class Sorter:
     def __init__(self, S, A, ctx, C, DATA, ROOT):
         self.S, self.A, self.ctx, self.C, self.DATA = S, A, ctx, C, DATA
@@ -296,20 +315,11 @@ class Sorter:
         x = np.array([math.cos(yaw_rel - bias), math.sin(yaw_rel - bias), 0.0])      # the jaws' real axis, fixed -> moving
         q2, _ = kin.ik.solve(q_rel[:5].copy(), tcp - 0.006 * x, yaw_rel, iters=30)    # fixed jaw off the block's face
         V._goto(q2, g_rel, 0.3)
-        q3, _ = kin.ik.solve(np.array(q2).copy(), tcp - 0.006 * x + [0, 0, vp.HOVER], yaw_rel, iters=40)
+        q3, _ = kin.ik.solve(np.array(q2).copy(), tcp - 0.006 * x + [0, 0, V.rg_hover()], yaw_rel, iters=40)
         V._goto(q3, g_rel, 0.6)                                               # straight up
         # the block's size along the new jaw direction: the other side of what the pick measured
         w_held = float(last.get("width_mm") or 32.0); size = last.get("size_mm") or [w_held, w_held]
-        square = size[0] / max(1e-6, size[1]) < vp.SQUARE
-        if square: other = min(40.0, max(30.0, w_held)); turns = (90, -90)
-        elif self.cfg.get("regrip_long"): other = size[0] if abs(w_held - size[1]) <= abs(w_held - size[0]) else size[1]; turns = (90, -90)
-        else:
-            # A block that is not square (the green 2x3) is NOT gripped along its long side: the jaws then press on the
-            # two small ends and the block squirts out sideways (07:57 run: held once, pushed away twice). It is turned
-            # 180 deg instead: gripped across the short side again, the opposite end toward the camera. Its two long
-            # sides stay under the fingers (out["hidden"]).
-            other = min(40.0, max(30.0, w_held)); turns = (180,)
-        if sign in (1, -1) and turns != (180,): turns = (90 * sign,)
+        other, turns = regrip_turns(colour, size, w_held, bool(self.cfg.get("regrip_long")), sign, vp.SQUARE, vp.LONG_BRICKS)
         other = min(50.0, max(30.0, other)) / 1000.0
         centre = tcp[:2] + max(0.0, w_held / 1000.0 - vp.REF_W) / 2 * x[:2]
         # Two measured offsets (mm, release gripper frame: x = fixed -> moving jaw, y = 90 deg left of it):

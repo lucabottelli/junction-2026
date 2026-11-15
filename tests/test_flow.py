@@ -26,6 +26,10 @@ class FakeC:
         if not self.stuck: self.pos.update({n: v for n, v in pos.items() if n != "id"})
         if k.get("gripper") is not None: self.pos["gripper"] = k["gripper"]
     def rise(self, wp1): self.log.append(("rise",))
+    def path(self, poses, speed=None, **k):
+        self.log.append(("path", [p.get("id") or p.get("shoulder_pan") for p in poses]))
+        for p in poses: self.goto(p, **k)
+    def tape_poses(self): return {"id": "tape_above"}, {"id": "tape_place"}
     def above_wp2(self, wp1, wp2pos): return {"id": "wp2_above"}, True
     def to_wp2(self, *a): self.log.append(("to_wp2",))
     def up_wp2(self, *a): self.log.append(("up_wp2",))
@@ -260,7 +264,7 @@ def test_block_cut_by_the_frame_is_moved_into_it_instead_of_rejected(tmp_path):
     rec = FL.cycle(1, "")
     assert rec["verdict"] == "accept"
     ups = [x[1] for x in log if x[0] == "goto" and str(x[1]).startswith("wp2-1+")]
-    assert ups == ["wp2-1+22", "wp2-1+42", "wp2-1+62", "wp2-1+62", "wp2-1+62"]   # base lift 22 mm, then +20, +40; showings 3 and 4 start at +40
+    assert [u for u in ups if u != "wp2-1+22"] == ["wp2-1+42", "wp2-1+62", "wp2-1+62", "wp2-1+62"]   # +20, +40; showings 3 and 4 go straight to +40
     assert rec["steps"][3]["lift_mm"] == 40 and len(rec["steps"][3]["shots"]) == 3
     assert FL.lift_mem[("pink", "wp2-1", True)] == 40                            # remembered for the next re-clamped showing
 
@@ -278,3 +282,57 @@ def test_cut_block_that_cannot_be_moved_into_the_frame_is_still_rejected(tmp_pat
     FL.F.lifted = lifted
     rec = FL.cycle(1, "")
     assert rec["verdict"] == "reject" and rec["unconfirmed"] and "cut by" in rec["reason"]
+
+
+def test_green_is_turned_180_on_a_re_clamp_whatever_the_camera_measured():
+    sorter = pytest.importorskip("sorter")
+    rt = sorter.regrip_turns
+    assert rt("green", [47.0, 32.0], 32.0)[1] == (180,)                 # measured long
+    assert rt("green", [36.0, 33.0], 33.0)[1] == (180,)                 # measured almost square (the 08:51 run): still 180
+    assert rt("green", [36.0, 33.0], 33.0, sign=1)[1] == (180,)         # the flow's turn direction does not change that
+    assert rt("green", [36.0, 33.0], 33.0, regrip_long=True)[1] == (90, -90)   # only the explicit dev option grips it lengthwise
+    assert rt("pink", [33.0, 32.0], 32.0)[1] == (90, -90) and rt("blue", [33.0, 32.0], 32.0, sign=-1)[1] == (-90,)
+    assert rt("pink", [47.0, 32.0], 32.0)[1] == (180,)                  # any block measured long is not gripped lengthwise either
+    assert rt("green", [47.0, 32.0], 32.0)[0] == 32.0 and rt("green", [47.0, 32.0], 48.0)[0] == 48.0   # opening = how it was held
+
+
+def test_between_the_steps_the_arm_moves_through_the_clearance_poses_in_one_move(tmp_path):
+    FL, T, log = make(tmp_path, [])
+    FL.cycle(1, "")
+    paths = [x[1] for x in log if x[0] == "path"]
+    assert paths[0] == ["wp2_above", "wp2-1"]                                    # WP1 -> above WP2 -> first photo pose
+    assert paths[1] == ["wp2-1", "wp2_above", "tape_above"]                      # last photo pose -> out of WP2 -> tape spot
+    assert paths[2] == ["wp2_above", "wp2-1"] and paths[3] == ["wp2_above", "tape_above"]
+    assert paths[-2] == ["wp2_above", 1, 1] and paths[-1] == [1, "home"]         # -> above plate A -> plate A; then up and home
+    assert not [x for x in log if x[0] in ("to_wp2", "up_wp2")]                  # no separate stop above WP2 any more
+
+
+def test_arm_path_keeps_moving_through_the_via_points_and_ends_exactly():
+    arm = pytest.importorskip("arm")
+    class Clock:                                    # fake time: every sleep advances it, so the test takes no real time
+        t = 0.0
+        def time(self): return self.t
+        def sleep(self, d): self.t += d
+    class A:
+        fast = None; goals = []
+        def __init__(self): self.cmd = {n: 2000.0 for n in arm.JOINTS}
+        def _check(self): pass
+        def _settle(self, tgt): self.cmd = dict(tgt); return 0
+        goal = property(lambda s: s.goals[-1], lambda s, v: s.goals.append(dict(v)))
+        goto = arm.Arm.goto; path = arm.Arm.path
+    real = arm.time; arm.time = Clock()
+    try:
+        a = A(); J = arm.JOINTS
+        via = {**a.cmd, "shoulder_pan": 2600.0}; end = {**via, "shoulder_lift": 2500.0}
+        a.path([via, end], 1.0)
+    finally:
+        arm.time = real
+    g = a.goals
+    assert all(abs(g[-1][n] - end[n]) < 1e-6 for n in J)                                   # ends exactly on the last pose
+    step = [max(abs(g[i + 1][n] - g[i][n]) for n in J) for i in range(len(g) - 1)]
+    mid = step[len(step) // 5: -len(step) // 5]
+    assert min(mid) > 0.3 * max(step)                                                      # never stops on the way
+    near = min(max(abs(x[n] - via[n]) for n in J) for x in g)
+    assert 5 < near < 0.5 * arm.CORNER                                                     # rounds the via point, stays close to it
+    assert all(x["shoulder_pan"] <= 2600.0 + 1e-6 and x["shoulder_lift"] <= 2500.0 + 1e-6 for x in g)   # no overshoot
+    assert max(step) < 1.3 * arm.VMAX * 0.02 * 1.01                                        # not faster than a single move at this speed

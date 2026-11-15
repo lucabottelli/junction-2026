@@ -848,6 +848,54 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Context:** the plain vision pick got 6/10 and 7/10 on single attempts in the two tests just before (07:10, 07:15); the re-clamp allows 3 attempts, each with a fresh look.
     - **Not done:** not wired into the inspect flow (`autocollect.inspect`, edited by another session) or `sorter._inspect` (still the tape spot). The front models have only seen first-grip views; green held across its long side is a new view.
 
+39. **Production sort flow as its own module, `anomaly_capture/flow.py`** (2026-11-15 ≈07:45–08:20, the user's spec, intel-43). **Written and tested on a fake station; not yet loaded on the server or run on the arm.**
+    - **The flow, per block:**
+      1. vision pick off the start plate → WP1 (3 retries);
+      2. WP2, first showing: all three WP2 poses, each photo judged at once; the first anomaly → reject plate;
+      3. clean → re-clamp turned 90° (`sorter.regrip_vision`), then ONE photo at the side view (first WP2 pose), judged;
+      4. repeat until all 4 sides are shown; top and bottom are not inspected (the user's choice);
+      5. all clean → accept plate.
+    - **Same turn direction for every re-clamp of one block.** +90° then −90° shows the first side again: the −90° grasp is the +90° grasp flipped 180°, so the opposite face points at the camera. The first re-clamp chooses the sign; the later ones are asked for it (`regrip_vision(sign=…)`, requested from intel-2f; the flow passes it only once the argument exists). The flow also tracks the shown side from the reported `turn_deg`, so a wrong-way turn costs one more re-clamp instead of a false "all sides seen". Limit: `max_reclamps` 4 (3 are needed).
+    - **Judging one photo** = the path the colour models were trained on (`ctx.capture`, outline mask, lifted poses), the same rules as `autocollect.inspect`: visible not-block-coloured patch → anomaly; model score ≥ `t_high` with nothing visible, or between the thresholds, or block cut by the frame → doubt → one retake. `sorter.look` is not used: its `prep.inspect_crop` path is not what the models saw.
+    - **A doubt that stays goes to the reject plate** (`uncertain_to` = `reject`, logged `unconfirmed`); `POST /flow/cfg?uncertain_to=accept` flips it. Open question for the user: their rule from 04:26 says a score alone is no anomaly, their flow says reject on detection.
+    - **No block in the photo** after the retake = not in the jaws: cycle aborted, nothing goes on a plate. Two aborts in a row stop the run.
+    - **Failed re-clamp** (after its own 3 attempts): the block is fetched from the re-clamp spot and rejected as not verifiable; if the fetch fails too, the run stops and asks for a hand.
+    - **Plates:** two taught waypoints (slots `sort_good`, `sort_defect`, optional `_above`). Which is accept and which is reject is a setting: `POST /flow/cfg?accept=sort_good|sort_defect`.
+    - **API:** `POST /flow/start?n=0&colour=` (n 0 = until the start plate is empty, max 50; colour empty = nearest block), `GET /flow/status`, `POST /flow/cfg`, `POST /flow/stop`. Log: `runs/flow_<time>/log.jsonl` with per-block pick, inspect, sort and cycle times and the inference ms (feeds §9).
+    - **Checked:** `tests/test_flow.py`, 11 cases on a fake station (order of photos, early stop at each stage, direction kept, mixed direction, retake, plate swap, lost block, failed re-clamp, empty plate): 11/11 under Studio's Python. The dev venv skips the file (no lerobot there).
+    - **Not checked:** anything on the arm. Known risks: the models have only seen first-grip views, so re-clamped views (green across its long side above all) may score high; both plate waypoints are untaught.
+    - **To run:** teach the two plates on the Sort page → restart the tool (announce it to the other sessions) → `curl -X POST '127.0.0.1:7870/flow/start?n=1&colour=pink'`.
+
+40. **User-facing page at `/`; the engineering interface moved to `/dev`** (2026-11-15 ≈08:00, the user's request, intel-43). **Checked on the mock station; the live server needs a restart for the new routes.**
+    - **`anomaly_capture/web/operator.html`:** one standalone file (own CSS and JS, same dark tokens and fonts), so work on the dev pages cannot break it. It shows the three camera feeds (refreshed snapshots), "Run the task" (blocks to sort, which colour, accept-plate assignment, fast-pick toggle, Start), a readiness line that names what is missing, the live state with the sides shown so far, totals and the list of sorted blocks with the reason for each. STOP button and Space/Esc stop everything.
+    - **Look (the user's brief, ≈08:12):** extremely futuristic, monochrome with light-blue accents (`#8FDBFF`), frosted glass. Black base with a faint grid and blue glows; every panel is a translucent blurred pane; camera tiles have corner brackets and a slow scan line; thin sans headings and mono labels instead of the serif. Red is used only for STOP and faults. The dev interface keeps its champagne/serif look.
+    - **Dev menu** (top right): links to `/dev` (the old overview), Connect, Waypoints, Inspect & sort, Anomaly photos. The dev sidebar has "← User view".
+    - **Routing:** `ui.operator()` serves `/`; `00-overview.html` has `data-path="/dev"`; `capture.py` root calls `ui.operator()`. All other dev paths are unchanged. Until the restart `/` still shows the dev overview and `/dev` is a 404.
+    - **Calls only:** `/status`, `/arm/status`, `/sort/status`, `/flow/*`, `/sort/cfg?vision_fast=`, `/snap/<cam>` and the four stop endpoints. Without `/flow/*` it says the sort task is not loaded.
+    - **Checked:** mock server on a spare port: `/` 200 (user page), `/dev` and `/sort` 200, `/flow/status` 200; headless-browser screenshots of both views; `tests/test_api_sweep.py` + `test_api_mock.py` 12 passed (the sweep and `ui_smoke.mjs` now use `/dev` for the overview). Not checked: a real run driven from the page (the mock has no vision pick).
+
+41. **Re-clamp on the tape spot works on the arm: taught waypoints for the set-down, the arm's own release pose for the turned grip** (2026-11-15 07:40–08:08, the user's rules; replaces the plate set-down of decision 38).
+    - **The user's rules:** the re-clamp happens at the tape spot, not on the start plate; the grip stored in `tape_above` / `tape_place` is ignored, the clamp is kept until the block stands on the tape; the turn may be +90° or −90°, whichever is in reach.
+    - **Flow (`sorter.regrip_vision`):** WP1 → `tape_above` → `tape_place` slowly with the clamp kept → read the measured pose (FK) → open, fixed jaw 6 mm off the block, straight up → `vpick.grasp_world` at that pose with the jaws turned (hover, stepwise descent with sag correction and contact stop, close until stall, lift) → WP1 → the top camera checks that the tape spot is empty.
+    - **What did not work on the way:**
+      | Try | Result | Cause |
+      |---|---|---|
+      | Camera-guided grip on the start plate (07:32) | "no reachable grasp" ×3 | the block lay 39° off the release direction |
+      | Camera-guided set-down on the tape spot (07:40) | block 34° off | `vpick.place` let go 39 mm above the table (no sag correction, read as contact); the block fell |
+      | Camera-guided grip at the tape spot (07:42, 07:44) | closed on nothing ×5 | the pixel calibration is fitted on the plate and is about 37 mm off at the tape spot |
+      | Release pose + 90° turn, no correction (07:49) | closed on nothing ×2 | jaws 14 mm beside the block: the model's grasp point is not where the block is after a wrist turn |
+    - **Offsets (mm, release gripper frame, x = fixed → moving jaw, y = 90° left):** block centre against the model's grasp point `a = (−21, 7)`, jaw closing point `b = (2, 7)`; target correction `c(turn) = a − R(turn)·b`, so +90° → (−14, 5), 180° → (−19, 14), −90° → (−28, 9). Fitted from two misses seen in the top frames; −90° is not tested. Settings `regrip_a_mm`, `regrip_b_mm`.
+    - **Results with the final code (every re-clamp held on its first attempt, about 31 s each):**
+      | Block | Turn | Held | Run |
+      |---|---|---|---|
+      | blue 2×2 | +90° | 4 of 4 | `regripv_20261115_075222`, `_075332` |
+      | pink 2×2 | +90° | 3 of 3 | `_080511` |
+      | green 2×3 | 180° | 2 of 2 | `_080239` |
+      | green 2×3 along its long side | +90° | 1 of 2 (then the block was pushed away twice) | `_075543` |
+    - **Green (the user's observation, confirmed in the frames):** gripped along its long side the block is pushed out sideways when the jaws close. A block that is not square is therefore turned 180° and gripped across its short side again (`regrip_long` setting turns the long-side grip back on). Its two long sides stay under the fingers and are not shown to the camera by any showing.
+    - **Other:** `regrip_vision(..., sign=±1)` restricts the turn direction (asked for by session intel-43 for `flow.py`); a block left on the tape spot is fetched at the start of `regrip_test` (worked for green on the third attempt, failed for blue: the calibration offset there is only a guess, `regrip_off_px`); the plain vision pick needed 2 attempts for pink and missed twice on blocks at the spot.
+    - **Open:** not chained into the inspection yet; no photo of the block standing free on the tape spot (the only way to see green's long sides); the front models have only seen first-grip views.
+
 ---
 
 ## 5. Issues and fixes log
@@ -1109,3 +1157,6 @@ Libraries can supply the building blocks. The sequence itself (set the brick dow
 List of controls that exist in the engineering tool (`127.0.0.1:7870`) and are to be carried over to the final user-facing interface. Add to it as features are decided.
 
 - **Vision pick: fast (toggle).** Decided by the user 2026-11-15 07:30. On = ≈14 s per pick (3 descent steps, quicker travel), off = 18–22 s (6 corrected steps). Backend: cfg key `vision_fast` (`POST /sort/cfg?vision_fast=0|1`, default on), `VisionPick(fast=)` in `anomaly_capture/vpick.py`. Today's switch: "Vision pick: fast" on the Sort page (`web/pages/08-sort.html`, id `so-vfast`). Measured 9/10 with it on; no same-code baseline with it off yet.
+- **Accept / reject plate assignment.** Decided by the user 2026-11-15 07:45. Two plate waypoints; the interface lets the user say which one takes accepted blocks and which one rejected blocks. Backend: `POST /flow/cfg?accept=sort_good|sort_defect` (the other slot becomes reject), read back in `GET /flow/status` → `cfg.accept`, `cfg.reject`, `plates`. No control in the engineering tool yet.
+- **Start / stop of the production sort flow** and its live result list: `POST /flow/start`, `POST /flow/stop`, `GET /flow/status` (`cur`, `history`, `totals`). No page yet.
+- **08:09 — second speed step tried, no gain.** Fast mode with the lift at 0.55 (instead of `rise()`'s 0.3) and a 0.12 s pause in `_servo_in`: 7/10, mean held pick 15.2 s (pink 13.0, green 14.7, blue 16.0) against 14.2 s in the 07:23 run (`runs/acttest_20261115_080906`). Misses: 2 closed on nothing, 1 "lost on the way" with an ambiguous margin (29 ticks, camera decided). Pick time is dominated by where the brick lies, not by the lift. Faster lift reverted; the shorter `_servo_in` pause stays. Fast mode totals with the held-check fix: 16/20.

@@ -44,6 +44,31 @@ ENGAGE_VMAX = 250    # first 3 s of mirroring: creep to the leader's pose instea
 TOL = 40             # ticks (~3.5 deg): "arrived" for body joints (P-gain 16 leaves some gravity sag)
 BLOCKED = 160        # ticks (~14 deg): still this far off after settling = something is in the way -> stop
 TICK_PER_DEG = 4096 / 360
+FAST_VMAX = 1.5      # x VMAX: the most a fast-mode cruise may ask for (~195 deg/s)
+
+
+def profile(d, vmax, ramp=0.0, cruise=None):
+    """Time law of one move over d ticks (the joint that travels furthest) -> (T seconds, f(t) -> share of the way).
+    Default: minimum jerk. Peak speed = vmax, mean = vmax / 1.875 (it never stays at its speed).
+    ramp > 0 (fast mode): the speed rises smoothly to `cruise` ticks/s in `ramp` s (smoothstep: the acceleration
+    starts and ends at 0, peak 1.5 * cruise / ramp), stays there, and falls the same way; T = d / cruise + ramp.
+    Used only when the move is long enough to reach the cruise speed and comes out shorter than minimum jerk:
+    short moves (the corrected steps of a pick, a set-down) keep the minimum-jerk law at their own speed."""
+    T = max(0.25, 1.875 * d / vmax)
+    v = cruise or vmax
+    if ramp > 0 and d >= v * ramp and d / v + ramp < T:
+        T = d / v + ramp; k = v * ramp / d                 # share of the way spent in the two ramps together
+        def f(t):
+            if t >= T: return 1.0
+            if t < ramp: u = max(0.0, t) / ramp; return k * (u ** 3 - u ** 4 / 2)
+            if t > T - ramp: u = (T - t) / ramp; return 1 - k * (u ** 3 - u ** 4 / 2)
+            return k / 2 + (t - ramp) * v / d
+        return T, f, v
+    def f(t):
+        s = min(1.0, max(0.0, t / T)); return s ** 3 * (10 - 15 * s + 6 * s * s)
+    return T, f, vmax
+
+
 EDIT_BUSY = "the arm is running a routine / collection / sort: STOP it first, then change waypoints"   # poses in use
 
 
@@ -71,6 +96,7 @@ class Arm:
         self.mode = "off"             # off | hold | limp | mirror
         self.pos, self.goal, self.cmd, self.lpos = {}, {}, {}, {}
         self.vmax = VMAX * 0.5
+        self.fast = None              # fast mode for the next goto: (speed scale, ramp seconds), set by Collector.goto
         self.mirror_t = 0.0
         self.engaged = False
         self.bus_errors = 0
@@ -215,18 +241,21 @@ class Arm:
         if self.stop.is_set(): raise Stopped()
 
     def goto(self, tgt, speed):
-        """Minimum-jerk move of all joints from the current command to `tgt` (peak speed = speed*VMAX)."""
+        """Move of all joints from the current command to `tgt`, all arriving together. Minimum jerk (peak speed =
+        speed*VMAX); in fast mode (self.fast) a long move ramps up to its cruise speed, holds it and ramps down
+        (profile())."""
         vmax = max(50.0, VMAX * speed)
         start = dict(self.cmd)
         d = max(abs(tgt[n] - start[n]) for n in JOINTS)
-        T = max(0.25, 1.875 * d / vmax)          # min-jerk peak velocity = 1.875 * mean velocity
-        self.vmax = vmax * 1.2                   # rate limiter slightly above the profile: never the bottleneck
+        scale, ramp = self.fast or (1.0, 0.0)
+        T, f, vpk = profile(d, vmax, ramp, min(VMAX * FAST_VMAX, vmax * scale))
+        self.vmax = vpk * 1.2                    # rate limiter slightly above the profile: never the bottleneck
         t0 = time.time()
         while True:
             self._check()
-            s = min(1.0, (time.time() - t0) / T); m = s ** 3 * (10 - 15 * s + 6 * s * s)
+            t = time.time() - t0; m = f(t)
             self.goal = {n: start[n] + (tgt[n] - start[n]) * m for n in JOINTS}
-            if s >= 1: break
+            if t >= T: break
             time.sleep(0.02)
         # settle: body joints within TOL and gripper stopped moving (it stalls on the brick when closing)
         t1, lastg, e = time.time(), None, 0

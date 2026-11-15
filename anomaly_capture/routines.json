@@ -134,5 +134,39 @@
    }
   ],
   "created": "2026-11-14T03:18:39"
+ },
+ "plate_a": {
+  "waypoints": [
+   {
+    "name": "plate_a",
+    "pos": {
+     "shoulder_pan": 1869,
+     "shoulder_lift": 2151,
+     "elbow_flex": 1883,
+     "wrist_flex": 2996,
+     "wrist_roll": 1133,
+     "gripper": 1918
+    },
+    "capture": false
+   }
+  ],
+  "created": "2026-11-15T08:35:54"
+ },
+ "plate_b": {
+  "waypoints": [
+   {
+    "name": "plate_b",
+    "pos": {
+     "shoulder_pan": 2809,
+     "shoulder_lift": 2260,
+     "elbow_flex": 1661,
+     "wrist_flex": 3099,
+     "wrist_roll": 1045,
+     "gripper": 1923
+    },
+    "capture": false
+   }
+  ],
+  "created": "2026-11-15T08:36:25"
  }
 }

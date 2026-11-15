@@ -1,6 +1,6 @@
 {
- "accept": "sort_good",
- "reject": "sort_defect",
+ "accept": "plate_a",
+ "reject": "plate_b",
  "max_reclamps": 4,
  "retakes": 1,
  "uncertain_to": "reject",

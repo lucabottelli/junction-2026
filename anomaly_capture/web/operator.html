@@ -105,7 +105,7 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
 .pip img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .pip span{position:absolute;left:8px;bottom:7px;font-size:11.5px;font-weight:600;text-shadow:0 1px 6px #000}
 
-.island{position:absolute;left:18px;right:18px;bottom:18px;z-index:3;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:26px;padding:16px 22px;border-radius:24px;
+.island{position:absolute;left:18px;right:18px;bottom:18px;z-index:3;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:26px;padding:16px 22px;border-radius:24px;
  background:linear-gradient(180deg,rgba(40,43,49,.56),rgba(18,20,24,.56));box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 0 0 1px var(--line2),0 30px 70px -24px #000;-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
 .now{min-width:0}
 .now .st{font-size:21px;font-weight:600;letter-spacing:-.022em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -119,6 +119,10 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
 .steps b{font-weight:500}
 .sides{display:inline-flex;gap:3px;margin-left:2px}
 .sides i{width:5px;height:5px;border-radius:50%;background:var(--ink4)}.sides i.on{background:var(--ink)}
+.lat{display:flex;gap:18px;padding-right:20px;border-right:1px solid var(--line2)}
+.lat div{display:grid;justify-items:start;gap:3px}
+.lat .n{font-size:17px;font-weight:400;line-height:1;letter-spacing:-.02em;white-space:nowrap}.lat .n small{font-size:11.5px;color:var(--ink3);margin-left:3px}
+.lat .k{font-size:11.5px;color:var(--ink3);white-space:nowrap}
 .tot{display:flex;gap:6px}
 .tot button{display:grid;justify-items:center;gap:3px;min-width:74px;padding:8px 10px;border-radius:var(--r-m)}
 .tot button:hover,.tot button:focus-visible{background:var(--fill);box-shadow:0 0 22px var(--glow-soft)}
@@ -129,7 +133,7 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
 .sheet{position:absolute;right:18px;bottom:112px;z-index:3;width:min(560px,calc(100% - 36px));max-height:46%;overflow-y:auto;padding:4px 18px;border-radius:var(--r);
  background:rgba(22,24,28,.66);box-shadow:var(--shadow);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);display:none}
 .sheet.open:not(:empty){display:block}
-.sheet .row{display:grid;grid-template-columns:22px 52px 76px minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:11px 0;font-size:13px}
+.sheet .row{display:grid;grid-template-columns:22px 52px 76px minmax(0,1fr) auto auto;gap:10px;align-items:baseline;padding:11px 0;font-size:13px}
 .sheet .row+.row{border-top:1px solid var(--line)}
 .sheet .n{color:var(--ink3)}.sheet .why2{color:var(--ink2);overflow-wrap:anywhere}
 .v-accept{font-weight:600}.v-reject{font-weight:600;color:var(--ink2)}.v-aborted{color:var(--ink3)}
@@ -139,9 +143,9 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
 @keyframes in{from{opacity:0;transform:translateY(-6px)}}
 :focus-visible{outline:0}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-@media (max-width:1180px){.island{grid-template-columns:minmax(0,1fr) auto}.steps{display:none}}
+@media (max-width:1380px){.island{grid-template-columns:minmax(0,1fr) auto auto}.steps{display:none}}
 @media (max-width:860px){body{overflow:auto}html,body{height:auto}.app{grid-template-columns:1fr;height:auto}.panel{overflow:visible}
- .stage{aspect-ratio:4/3}.island{grid-template-columns:1fr;gap:10px;padding:14px 16px}.tot{justify-content:space-between}.pips{width:30%}.sheet{bottom:auto;top:18px;left:18px;right:18px;width:auto}}
+ .stage{aspect-ratio:4/3}.island{grid-template-columns:1fr;gap:10px;padding:14px 16px}.lat{border-right:0;padding-right:0;justify-content:space-between}.tot{justify-content:space-between}.pips{width:30%}.sheet{bottom:auto;top:18px;left:18px;right:18px;width:auto}}
 </style></head><body class=pre>
 <img id=amb alt="">
 <div class=app>
@@ -167,7 +171,8 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
   <div class=field><div class=l>Colour</div><div class=seg id=seg-colour></div></div>
   <div class=field><div class=l>Accept plate</div><div class=seg id=seg-accept></div></div>
  </div>
- <div class=group><div class=rowi><span>Fast pick</span><button type=button class=sw id=sw-fast onclick="setFast()" aria-label="Fast pick"></button></div></div>
+ <div class=group><div class=rowi><span>Fast pick</span><button type=button class=sw id=sw-fast onclick="setFast()" aria-label="Fast pick"></button></div>
+  <div class=rowi><span>Fast moves</span><button type=button class=sw id=sw-mfast onclick="setMFast()" aria-label="Fast moves"></button></div></div>
 
  <span class=sp></span>
  <div class=why id=why></div>
@@ -185,6 +190,7 @@ kbd{font:500 11px/1 var(--sans);padding:3px 7px;border-radius:6px;background:rgb
  <section class=island>
   <div class=now><div class=st id=now-st>Idle</div><div class=ms id=now-ms></div></div>
   <div class=steps id=steps></div>
+  <div class=lat id=lat title="Timings of the last sorted block"></div>
   <div class=tot id=tot title="Show or hide the results">
    <button type=button onclick="toggleSheet()"><span class="n num" id=t-a>0</span><span class=k>Accepted</span></button>
    <button type=button class=r onclick="toggleSheet()"><span class="n num" id=t-r>0</span><span class=k>Rejected</span></button>
@@ -236,6 +242,7 @@ function toggleMenu(e){e.stopPropagation();$('devmenu').classList.toggle('open')
 document.addEventListener('click',()=>$('devmenu').classList.remove('open'));
 function toggleSheet(){sel.sheet=!sel.sheet;saveSel()}
 function setFast(){if(SO)post('/sort/cfg?vision_fast='+(SO.cfg.vision_fast?0:1))}
+function setMFast(){if(SO)post('/sort/cfg?motion_fast='+(SO.cfg.motion_fast?0:1))}
 function stopAll(){['/flow/stop','/sort/stop','/collect/stop','/arm/stop'].forEach(u=>fetch(u,{method:'POST'}).catch(()=>{}));toast('Stopped. The arm holds its position.');setTimeout(refresh,300)}
 document.addEventListener('keydown',e=>{if((e.code=='Space'||e.key=='Escape')&&!/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)){e.preventDefault();stopAll()}});
 async function connectArm(){if(connecting)return false;connecting=true;render();
@@ -264,6 +271,7 @@ function render(){
  seg('seg-colour',[['','Any'],['pink','Pink'],['blue','Blue'],['green','Green']],sel.colour,v=>{sel.colour=v;saveSel()});
  seg('seg-accept',[['plate_a','Plate A'],['plate_b','Plate B']],FL?FL.cfg.accept:'plate_a',v=>{if(running){toast('Not while sorting');return}post('/flow/cfg?accept='+v)});
  $('sw-fast').classList.toggle('on',!!(SO&&SO.cfg&&SO.cfg.vision_fast));
+ $('sw-mfast').classList.toggle('on',!!(SO&&SO.cfg&&SO.cfg.motion_fast));
  const pr=problems(),b=$('primary');
  if(running){b.className='btn '+(FL.pause?'go':'hold');b.disabled=false;setH('primary',FL.pause?ICON.play+'Resume':ICON.pause+'Pause')}
  else{b.className='btn go';b.disabled=connecting||busy||pr.length>0;setH('primary',connecting?'Connecting':ICON.play+'Start')}
@@ -278,7 +286,10 @@ function render(){
  setH('steps',STEPS.map(([t],i)=>`<span class="${running&&i==at?'cur':running&&at>i?'done':''}"><b>${t}</b>${i==1&&running?`<i class=sides>${Array.from({length:need},(_,k)=>`<i class="${k<sides?'on':''}"></i>`).join('')}</i>`:''}</span>`).join(''));
  const t=FL?FL.totals:{};$('t-a').textContent=t.accept||0;$('t-r').textContent=t.reject||0;$('t-x').textContent=t.aborted||0;
  const h=FL?FL.history||[]:[];$('sheet').classList.toggle('open',!!sel.sheet);
- setH('sheet',h.map(r=>`<div class=row><span class="n num">${r.block}</span><span>${esc(r.brick||'')}</span><span class="v-${esc(r.verdict)}">${esc(({accept:'Accepted',reject:'Rejected',aborted:'Aborted'})[r.verdict]||r.verdict)}</span><span class=why2>${esc(r.reason||'')}</span><span class="n num">${r.t_cycle_s!=null?r.t_cycle_s+' s':''}</span></div>`).join(''))}
+ const L=h.find(r=>r.t_cycle_s!=null)||{},Li=h.find(r=>r.infer_ms_mean!=null)||{},f=(v,u)=>v!=null?`${v}<small>${u}</small>`:'–';
+ setH('lat',[['Inference'+(Li.device?' · '+esc(Li.device):''),f(Li.infer_ms_mean,'ms')],['Pick',f(L.t_pick_s,'s')],['Inspect',f(L.t_inspect_s,'s')],['Sort',f(L.t_sort_s,'s')],['Cycle',f(L.t_cycle_s,'s')]]
+  .map(([k,v])=>`<div><span class="n num">${v}</span><span class=k>${k}</span></div>`).join(''));
+ setH('sheet',h.map(r=>`<div class=row><span class="n num">${r.block}</span><span>${esc(r.brick||'')}</span><span class="v-${esc(r.verdict)}">${esc(({accept:'Accepted',reject:'Rejected',aborted:'Aborted'})[r.verdict]||r.verdict)}</span><span class=why2>${esc(r.reason||'')}</span><span class="n num">${r.infer_ms_mean!=null?r.infer_ms_mean+' ms':''}</span><span class="n num">${r.t_cycle_s!=null?r.t_cycle_s+' s':''}</span></div>`).join(''))}
 
 /* ---------- polling ---------- */
 async function refresh(){

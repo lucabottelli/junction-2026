@@ -101,9 +101,12 @@ class Sorter:
                     # pick = "act" (policy.py): Studio export dir, OpenVINO device, export backend, limits per pick
                     "act_model": "", "act_device": "GPU", "act_backend": "auto", "act_mode": "chunk",
                     "act_max_s": 20.0, "act_retries": 2, "act_speed": 1.0,
-                    "vision_smooth": False, "vision_fast": True}      # pick = "vision": one continuous descent instead of corrected steps
+                    "vision_smooth": False, "vision_fast": True,      # pick = "vision": one continuous descent instead of corrected steps
+                    # fast moves (arm.profile): long moves ramp up to motion_speed (share of arm.VMAX), hold it, ramp down
+                    "motion_fast": False, "motion_speed": 1.0, "motion_ramp": 0.4}
         try: self.cfg.update(json.loads(self.cfg_path.read_text()))
         except Exception: pass
+        self.apply_motion()
         self.state, self.msg, self.ok = "idle", "teach the two plates, tick what each WP2 pose shows, then START", True
         self.active = False; self.stop_flag = threading.Event()
         self.flags = {"grasped": False, "next": threading.Event()}
@@ -251,7 +254,7 @@ class Sorter:
             self.act_info = e.info; raise
         return g_lock
 
-    def regrip_vision(self, g_lock, k=1, retries=1, sign=None):
+    def regrip_vision(self, g_lock, k=1, retries=1, sign=None, end=None):
         """Re-clamp turned 90 deg on the TAPE SPOT, using the taught waypoints for the set-down and the arm's own
         release pose for the new grasp (2026-11-15 07:50, the user's rules).
           1. WP1 -> tape_above -> tape_place with the clamp kept at g_lock: the gripper values stored in those two
@@ -263,6 +266,8 @@ class Sorter:
           4. WP1; the top camera checks that the tape spot is empty (the block really left with the gripper).
         No pixel calibration is used for the grasp: the homography is fitted on the plate and was ~37 mm off here.
         sign = +1 / -1: only that turn direction (a caller that needs every re-clamp of a block to turn the same way).
+        end = pose to carry the block to after the lift instead of WP1 (flow.py: straight on to above WP2, no detour
+        over WP1); the held check and the camera's look at the tape spot happen there.
         cfg regrip_e_mm = [ex, ey]: where the held block's centre really is against the model's grasp point, in the
         gripper frame at the release (x = fixed -> moving jaw, y = 90 deg left of it). The model's wrist-roll axis is
         not where the real one is, so a 90 deg turn about it lands beside the block (07:49 run: jaws 14 mm off along
@@ -335,7 +340,7 @@ class Sorter:
                    "unreachable": "neither +90° nor -90° is in reach at the tape spot"}.get(res, str(res))
             raise pol.PickFailed(f"re-clamp failed: {why}", retry=False)
         g = V.g_lock
-        C.rise(wp1); C.goto(wp1, gripper=g); time.sleep(0.3)
+        C.rise(wp1); C.goto(end or wp1, gripper=g); time.sleep(0.3)
         out["g_wp1"] = round(A.pos["gripper"]); out["g_lock"] = round(g)
         if A.pos["gripper"] - g < vp.HELD_TICKS: raise pol.PickFailed("re-clamp failed: the block was lost on the way to waypoint 1", retry=False)
         try:                                                                  # camera: is the tape spot empty now?
@@ -851,6 +856,12 @@ class Sorter:
         except Exception as e:
             self.calib = {"running": False, "result": {"error": str(e)}}
 
+    def apply_motion(self):
+        """Hand the fast-move setting to the collector: every scripted move (pick, carry, re-clamp, plate) goes through
+        Collector.goto."""
+        c = self.cfg
+        self.C.fast = (float(c["motion_speed"]), float(c["motion_ramp"])) if c.get("motion_fast") else None
+
     def status(self):
         try: models = self.scorer.models()
         except Exception: models = []
@@ -1079,7 +1090,8 @@ def make_router(S, A, ctx, C, DATA, ROOT):
             retries: int = -1, allow_incomplete: int = -1, release: int = -1, release_cam: str = "", cascade: int = -1,
             fast_device: str = "", view_deg: float = -1, finger_deg: float = -1, max_regrasps: int = -1,
             act_model: str = None, act_device: str = "", act_backend: str = "", act_mode: str = "", act_max_s: float = -1,
-            act_retries: int = -1, act_speed: float = -1, vision_smooth: int = -1, vision_fast: int = -1):
+            act_retries: int = -1, act_speed: float = -1, vision_smooth: int = -1, vision_fast: int = -1,
+            motion_fast: int = -1, motion_speed: float = -1, motion_ramp: float = -1):
         if pick in ("handfeed", "teleop", "act", "vision"): T.cfg["pick"] = pick
         if act_model is not None: T.cfg["act_model"] = act_model.strip()
         if act_device in pol.DEVICES: T.cfg["act_device"] = act_device
@@ -1090,6 +1102,10 @@ def make_router(S, A, ctx, C, DATA, ROOT):
         if 0.1 <= act_speed <= 1: T.cfg["act_speed"] = act_speed
         if vision_smooth in (0, 1): T.cfg["vision_smooth"] = bool(vision_smooth)
         if vision_fast in (0, 1): T.cfg["vision_fast"] = bool(vision_fast)
+        if motion_fast in (0, 1): T.cfg["motion_fast"] = bool(motion_fast)
+        if 0.3 <= motion_speed <= 1.5: T.cfg["motion_speed"] = motion_speed          # share of arm.VMAX (arm.FAST_VMAX caps it)
+        if 0.15 <= motion_ramp <= 1.5: T.cfg["motion_ramp"] = motion_ramp            # seconds to reach the speed
+        T.apply_motion()
         if T._pol and T._pol[0] != (T.cfg["act_model"], T.cfg["act_device"], T.cfg["act_backend"]) and not T.active:
             T.drop_policy()
         if judge in ("manual", "model"): T.cfg["judge"] = judge

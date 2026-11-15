@@ -65,6 +65,12 @@ def test_rois_and_configs(mock_server):
     assert abs((r[2] - r[0]) / (r[3] - r[1]) - 4 / 3) < 0.01
     c = srv.post("/collect/cfg", speed=1.0, phase2="true", regrasp="false", roll_jitter=20)["cfg"]
     assert c["speed"] == 1.0 and c["phase2"] and not c["regrasp"] and c["roll_jitter"] == 20
+    m = srv.get("/sort/status")["cfg"]                                   # fast moves: off until asked for
+    assert (m["motion_fast"], m["motion_speed"], m["motion_ramp"]) == (False, 1.0, 0.4)
+    m = srv.post("/sort/cfg", motion_fast=1, motion_speed=1.2, motion_ramp=0.3)["cfg"]
+    assert (m["motion_fast"], m["motion_speed"], m["motion_ramp"]) == (True, 1.2, 0.3)
+    m = srv.post("/sort/cfg", motion_fast=0, motion_speed=9, motion_ramp=0.01)["cfg"]          # invalid values ignored
+    assert (m["motion_fast"], m["motion_speed"], m["motion_ramp"]) == (False, 1.2, 0.3)
     s = srv.get("/sort/status")
     assert s["plan"]["complete"] and s["tape"] and s["bins"] == {"good": True, "defect": True}, s["plan"]
     assert {m["cam"] for m in s["models"]} == {"front", "wrist"}

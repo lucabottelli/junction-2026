@@ -98,6 +98,11 @@
      <div class=hint id=so-pickhint></div></div>
     <label class=switch><input type=checkbox id=so-vsmooth><span class=tr></span><span><b>Vision pick: smooth descent</b><span class=d>One continuous move down to the brick instead of six corrected steps. Looks better and records cleaner demos; the grasp depth is a few mm less exact, so the pick rate can drop.</span></span></label>
     <label class=switch><input type=checkbox id=so-vfast><span class=tr></span><span><b>Vision pick: fast</b><span class=d>Three descent steps instead of six and quicker travel to the brick and up to waypoint 1. Saves a few seconds per pick; turn it off if picks start to miss.</span></span></label>
+    <label class=switch><input type=checkbox id=so-mfast><span class=tr></span><span><b>Fast moves</b><span class=d>Long moves speed up smoothly to the target speed, stay there and slow down smoothly, instead of easing the whole way. Short moves (pick steps, set-down) are unchanged.</span></span></label>
+    <div class=fields2>
+     <div class=field><label for=so-mspd>Target speed (× full)</label><input id=so-mspd type=number step=0.1 min=0.3 max=1.5></div>
+     <div class=field><label for=so-mramp>Ramp (s)</label><input id=so-mramp type=number step=0.05 min=0.15 max=1.5></div>
+    </div>
     <div class="so-act" id=so-act hidden>
      <div class=field><label for=so-amodel>Policy export</label>
       <div class=so-arow><select id=so-amodel></select><button class="btn sm ghost" onclick="soPolicies(true)" title="Look for exports again">Refresh</button></div>

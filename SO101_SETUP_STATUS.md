@@ -902,6 +902,50 @@ npx rsbuild dev >> ~/.local/share/physicalai/logs/studio-ui.log 2>&1
     - **Other:** `regrip_vision(..., sign=±1)` restricts the turn direction (asked for by session intel-43 for `flow.py`); a block left on the tape spot is fetched at the start of `regrip_test` (worked for green on the third attempt, failed for blue: the calibration offset there is only a guess, `regrip_off_px`); the plain vision pick needed 2 attempts for pink and missed twice on blocks at the spot.
     - **Open:** not chained into the inspection yet; no photo of the block standing free on the tape spot (the only way to see green's long sides); the front models have only seen first-grip views.
 
+41. **Review of the production flow from start to finish; the clamp opens only at plate A or B** (2026-11-15 ≈08:45, the user's rule: "the clamp should not release until it is at plate A or B"; intel-43). **Read against the current `sorter.py` / `vpick.py` / `collect.py` / `arm.py`; fixed in `flow.py`; tested on the fake station only.**
+    - **Found: three ways the clamp could open away from a plate.**
+      1. `Flow.drop` opened right after `C.goto(plate)` returned. `arm.goto` returns once the joints are within 40 ticks, and after 1.5 s it returns anyway unless they are more than 160 ticks (14°) off. So a slowed or lightly blocked arm could let go up to 14° short of the plate.
+      2. An aborted block ("no block seen in the jaws") went home with `gripper=open`. `arm.goto` moves the gripper together with the arm, so a block the camera had missed would have been dropped on the way.
+      3. A new run after a STOP: the first move of every pick is "home, gripper open" (`flow.cycle` and `VisionPick.run`), so a block still held from the stopped run was dropped in the air.
+    - **Fixes:**
+      1. `Flow.at(pose)`: before opening, the MEASURED joints must be within `AT_PLATE` = 60 ticks (≈5°) of the taught plate pose (waits up to 2.5 s). If not: `RuntimeError`, the run stops, the clamp stays closed on the block.
+      2. An abort with the clamp still closed carries it to the reject plate and opens there (`released_at` in the log). It still counts as aborted, not rejected.
+      3. `Flow.clear_gripper` at the start of a run: a closed clamp (below 20 % open) is raised straight up, taken over waypoint 1 to the reject plate and opened there before the first pick. An arm that merely rests with closed empty jaws makes the same trip once (about 8 s).
+    - **The clamp now opens in two places only:** on the tape spot inside a re-clamp (the block is gripped again there) and at plate A/B. STOP, pause and errors keep it closed (`hold_here` keeps the commanded gripper).
+    - **Checked and found consistent:** the pick ends at waypoint 1 and every showing returns there, which is where `regrip_vision` and `drop` expect to start; `regrip_vision` returns `turn_deg` at the top level and takes `sign`; an empty start plate ends the run (`"brick found on"` in the pick's message, the detector only looks inside the orange plate, so blocks on plate A/B are not picked again); two aborts in a row or a block left on the tape spot stop the run; hold mode is set before the first move (the arm was in mirror mode when I looked).
+    - **Known weak points, not fixable without the arm:**
+      - "No block seen" uses the colour-mask size (pink needs ≥ 120,000 px because the jaws are red too). A re-clamped pink block that shows less area would be aborted and end on the reject plate.
+      - A block cut by the frame edge is a doubt → retake → reject (unconfirmed). Green was cut often in earlier collections.
+      - The models have only seen first-grip views; re-clamped views may score high.
+      - `Flow.clear_gripper` rises straight up from wherever the arm stands; from a pose low in front of the front camera that path is untested.
+    - **Tests:** `tests/test_flow.py` 18/18 under Studio's Python (new: clamp opens only at the plate in accept, reject and late-reject cycles; arm short of the plate keeps the block; aborted block opened at the reject plate; a closed clamp at the start is emptied at the reject plate before the first pick).
+    - **State at ≈08:46:** both plates taught (`plate_a`, `plate_b`), tape spot taught, server restarted with this code; the restart dropped the arm connection.
+
+42. **First real runs of the production flow; the arm no longer returns to waypoint 1 between the steps** (2026-11-15 ≈08:41–08:48, the user started the runs from the user page; route fix by intel-43, loaded 08:48:19).
+    - **First runs on the arm (code of ≈08:40, before the clamp review of decision 41):**
+      | Run | Block | Verdict | Photos / re-clamps | Pick | Inspect | Sort | Cycle |
+      |---|---|---|---|---|---|---|---|
+      | `runs/flow_20261115_084134` | pink | accept: all 4 sides clean | 6 / 3 (turns +90, +90, +90) | 13.1 s | 162.1 s | 6.5 s | 181.6 s |
+      | `runs/flow_20261115_084454` | blue | reject, not confirmed clean | 5 / 1 | 17.0 s | 76.9 s | 8.6 s | 102.5 s |
+      - Pink scores: −0.11 … 0.24 over the six photos (clean ≤ 0.59), visible-patch share ≤ 0.003.
+      - Blue: first grip −0.35, −0.11, −0.01 (clean ≤ 0.70); after the first re-clamp 0.702 on two photos, 0.002 above `t_low`, so "doubt" → retake → reject. This is the expected weakness: the models have only seen first-grip views. Whether that blue block carried a mark is not recorded.
+      - Inspection takes about 54 s per re-clamp cycle (162 s for three).
+    - **The user's bug report: "it's always returning to waypoint one after each task".** Each showing ended with above WP2 → WP1, and each re-clamp ended at WP1, so the arm crossed the table to WP1 up to seven times per block.
+    - **Fix:** `flow.show` ends at the pose above WP2 and stays there; `sorter.regrip_vision` got `end=None` (the pose to carry the block to after the lift instead of WP1; default unchanged, so `/sort/regrip_test` is as before) and the flow passes the pose above WP2; the plate move starts from above WP2. WP1 is now visited once, at the end of the pick. Route per block: pick → WP1 → above WP2 → photos → above WP2 → tape spot → above WP2 → photo → … → above WP2 → plate.
+    - **Tests:** `tests/test_flow.py` 19/19 (new: nothing after the pick goes to WP1; every re-clamp ends above WP2). The two green runs of decision 43 (08:49, 08:51) ran with this route and the clamp review; no collision was reported.
+
+43. **Green rejected although it was clean: the photo was cut by the frame, not the model** (2026-11-15 08:51–08:57, the user: "it was a false positive"; intel-43).
+    - **Runs (code with the clamp review and the new route):**
+      | Run | Block | Verdict | What happened |
+      |---|---|---|---|
+      | `runs/flow_20261115_084922` | green | aborted, 145.4 s | First grip clean (0.06, 0.04, 0.12; clean ≤ 0.64). Re-clamp 1 failed ("the fingers closed on nothing"); the fetch from the tape spot closed on nothing 3 times; block left on the spot, run stopped. |
+      | `runs/flow_20261115_085157` | green | reject, 93.7 s | First grip clean (−0.08, −0.11, −0.09). After re-clamp 1 (turned +90°) both photos at `wp2-1` were "cut by the bottom of the frame", so no score was computed; doubt → retake (same pose, same result) → reject, logged `unconfirmed`. |
+    - **Cause of the reject:** after the +90° re-clamp the 2×3 is held along its long side. It hangs lower and nearer to the front camera (mask area 515,000 px against 400,000 at the first grip) and runs out of the frame at the bottom and the right (`training_images/front/inhand/test/20261115_085320_249_green_wp2-1_masked.jpg`). The anomaly model never scored that view. The flow treated "photo unusable" like "block doubtful".
+    - **Fix (`flow.look`):** a block cut by the bottom (top) edge is a bad photo. The photo pose is raised (lowered) 20 mm at a time, at most 4 times (`NUDGE_MM`, `NUDGE_MAX`), with the same pose-lifting code the collection uses (`feed.lifted`), and the photo is retaken; this costs no retake. The lift that worked is remembered per block, pose and first grip / re-clamp for the rest of the session (`lift_mm` in the log). Only if the pose can't go further and the block is still cut does it end as before (reject, unconfirmed).
+    - **Not fixed here (reported to intel-2f, their code):** the failed green re-clamp and fetch of the first run; and that this green block was turned 90° although `regrip_vision` is meant to turn a non-square block 180°.
+    - **Limits:** `edge_cut` only tests the top and bottom edges; in the photo the block also leaves the frame on the right, which a lift does not fix. A view of the green block held lengthwise is also new to the green model, so once it is in the frame it may still score high.
+    - **Tests:** `tests/test_flow.py` 21/21 (new: a cut block is moved into the frame and accepted, the lift is reused on the later showings; a cut block that can't be moved is still rejected). Not run on the arm.
+
 ---
 
 ## 5. Issues and fixes log
@@ -1106,6 +1150,12 @@ Everything below was built and tested without hardware. Nothing has run on the r
 | ACT `act-pick-sim610-real69x2-qualia` (export 5d03db18, OpenVINO, chunk 100, cams top+wrist) | GPU | export default | 7.8 ms p50 / 9.2 ms p95 | – | – | – | `policy.py --bench 20`, 2026-11-14 19:31, no arm. Loads via physicalai in 1.2 s; inputs `images.top`, `images.wrist` + state, as assumed in decision 23 |
 | same | NPU | export default | 10.2 ms p50 / 15.1 ms p95 | – | – | – | loads in 1.7 s |
 | same | CPU | export default | 81.9 ms p50 / 89.6 ms p95 | – | – | – | loads in 0.6 s |
+| PatchCore `models/front/pink` (wide_resnet50_2, 256×256, OpenVINO FP16) | GPU | FP16 | 4.8 ms p50 / 5.0 ms p95 | – | – | – | 2026-11-15, raw OpenVINO `LATENCY` hint, 40 runs, random input, batch 1, no IPC. Compile 1.0 s. `capture.py` was running (≈70 % of one core) |
+| same | NPU | FP16 | 83.1 ms p50 / 83.8 ms p95 | – | – | – | compile 5.9 s. Runs, but 17× slower than the GPU: PatchCore's nearest-neighbour search does not suit the NPU |
+| same | CPU | FP16 | 71.2 ms p50 / 82.0 ms p95 | – | – | – | compile 0.2 s |
+| SmolVLA run B (`4abb7b9d`, OpenVINO export, task "pick up the pink brick") | GPU | export default | 105 ms p50 / 158 ms p95 per action chunk | – | – | – | 2026-11-15, `Policy.chunk()` on random frames, 7 timed runs, observation build included, no arm. Loads in 13.2 s |
+| same | CPU | export default | 1862 ms p50 / 1888 ms p95 per chunk | – | – | – | loads in 6.9 s. Too slow for closed-loop control |
+| same | NPU | export default | not measured | – | – | – | did not finish loading within 7 min (killed by the timeout); cause not looked into |
 
 ---
 

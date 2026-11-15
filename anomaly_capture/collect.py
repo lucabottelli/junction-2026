@@ -129,6 +129,7 @@ class Collector:
         self.S, self.A, self.ctx, self.DATA = S, A, ctx, DATA
         self.EP = ROOT / "episodes"; self.EP.mkdir(exist_ok=True)
         self.cfg_path = Path(__file__).resolve().parent / "collect_settings.json"
+        self.fast = None        # fast mode: (target speed as a share of VMAX for a move at cfg speed, ramp seconds); sorter.apply_motion
         self.cfg = {"home": "home", "wp1": "wp1", "wp2": "wp2", "drops": "drops", "phase2": False, "regrasp": False, "speed": 0.5, "roll_jitter": 90, "lift_frac": LIFT_FRAC,
                     "act_roi": {k: prep.default_act_roi(k) for k in REC_CAMS},
                     # tape re-grip: opening past the brick width at release, optional contact detection from the following
@@ -203,7 +204,10 @@ class Collector:
             lo = (getattr(self.A, "g_floor", None) or self.A.fl[n][0]) if n == "gripper" else self.A.fl[n][0]
             tgt[n] = min(self.A.fl[n][1], max(min(lo, self.A.fl[n][0]), tgt[n]))
         self._tgt = tgt
-        return self.A.goto(tgt, speed or self.cfg["speed"])
+        # fast mode (sorter cfg motion_fast): long moves cruise at the target speed; slower moves keep their ratio to it
+        self.A.fast = (self.fast[0] / self.cfg["speed"], self.fast[1]) if self.fast else None
+        try: return self.A.goto(tgt, speed or self.cfg["speed"])
+        finally: self.A.fast = None
 
     def hold_here(self):
         """Stop following the leader; keep the commanded gripper (= keep squeezing the brick)."""
@@ -548,6 +552,7 @@ class Collector:
             if A.mode != "hold": A.set_mode("hold", force=True)
             g = A.cmd["gripper"]
             spd = self.cfg["speed"]; self.cfg["speed"] = min(spd, 0.3)
+            fast = self.fast; self.fast = None                       # dry runs stay slow whatever the fast mode says
             try:
                 if kind == "regrasp":
                     if not (self.slot("tape_above") and self.slot("tape_place")): raise RuntimeError("teach the tape spot (above + on) first")
@@ -568,7 +573,7 @@ class Collector:
                     for w in wp2[1:]: self.goto(w["pos"], gripper=g)
                     self.say("TEST: straight up, back to WP1"); self.from_wp2(wp1, wp2, g)
             finally:
-                self.cfg["speed"] = spd
+                self.cfg["speed"] = spd; self.fast = fast
             self.state = "done"
             if kind == "regrasp":
                 tries = (self.regrip_info or {}).get("attempts", 1)

@@ -1079,3 +1079,6 @@ Libraries can supply the building blocks. The sequence itself (set the brick dow
 - **Status:** `~/junction26/scripts/modal_b_status.sh`. Launch record: `~/junction26/runs/modal_b_launched.json`.
 - **Not in Studio:** these runs don't show under Jobs/Models. When done, `jobs/<id>/artifact.zip` on the volume has to be downloaded and imported by hand.
 - **Stop a run:** `MODAL_PROFILE=andreacevenini-aldini .venv/bin/python -m modal container stop --yes <id>` (from the Studio backend folder).
+- **Both finished (2026-11-15):** `smolvla-new55-30k` at 04:44 (30,443 steps, last val/loss 0.073, best 0.064 at epoch 11), `smolvla-real124-40k` at 05:01 (40,238 steps, last val/loss 0.182, best 0.178 at epoch 14). No preemption. val/loss was flat after ≈epoch 5 (new55) and ≈epoch 12 (real124): the extra steps did not improve it.
+  - Downloaded to `~/junction26/models/modal_b/<name>/` (`artifact.zip` 3.4 GB each, `metrics.csv`, OpenVINO export unpacked in `exports/openvino/`). Not imported into Studio.
+  - Two more 12-epoch SmolVLA runs (`f52ed47a`, `4c9a6f02`) were started on `physicalai-trainer-b` at 04:51–04:53 by another session; intel-48 did not launch or touch them. `jobs/35e3c72a…` on the volume is an unused upload from intel-48's first (failed) launch attempt.

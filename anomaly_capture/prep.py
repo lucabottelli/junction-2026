@@ -369,13 +369,15 @@ def complete_mask(img, mask, s=4, sat_min=185, val_min=80, hue_tol=9, grow_px=12
 
 BRICK_HUES = {"pink": (168, 1), "red": (168, 1), "blue": (95, 115), "green": (22, 88)}   # OpenCV hue 0-179, range may wrap
 # the lime-green 2x4 is hue 23-30 and paler (S 120-200) than pink/blue; the yellow plate is hue 18-20
-BRICK_SAT = {"green": (150, 100)}
-BRICK_HULL = {"green"}                      # box-shaped brick whose hue the jaws don't share: the mask is the blob's convex hull           # per brick: (sat_min, sat_weak) instead of the defaults
+BRICK_SAT = {"green": (150, 100)}           # per brick: (sat_min, sat_weak) instead of the defaults
+JAW_HUE_BRICKS = {"pink", "red"}            # bricks whose hue the red jaws share (see brick_mask)
+OUTLINE_MARGIN = 3                          # px at 1/4 scale (~1 mm): the outline mask reaches this far past the block's colour blob
 
 
 def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_weak=140):
-    """Mask of the held brick by its COLOUR (saturated pixels in the brick's hue range): the largest such blob, weighted
-    toward the image centre, closed and hole-filled (a pen cross stays inside). Robust at 10 cm where depth is patchy.
+    """Mask of the held brick: FOUND by its colour (saturated pixels in the brick's hue range, the largest blob weighted
+    toward the image centre), but the mask is that blob's OUTLINE filled in, so tape, ink or a sticker on the block stay
+    visible to the anomaly model. Robust at 10 cm where depth is patchy.
     For pink the red jaws have the same hue (175-179) and are included (in every photo alike); the orange wrist-camera mount (hue 1-7) is not. -> (mask, info) / (None, why)."""
     if brick not in BRICK_HUES: return None, f"no colour range for brick '{brick}'"
     H, W = img.shape[:2]; sm = cv2.resize(img, (W // s, H // s), interpolation=cv2.INTER_AREA)
@@ -400,27 +402,37 @@ def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_wea
     weak = cv2.morphologyEx(weak, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     _, lab2 = cv2.connectedComponents(weak | seed.astype(np.uint8))
     out = fill_holes(np.isin(lab2, np.unique(lab2[seed])).astype(np.uint8) * 255)
-    if brick in BRICK_HULL:                   # glossy hollow underside: grey reflections split the blob -> its convex hull
+    # OUTLINE, not colour (2026-11-15): the mask is the block's whole outline, so anything ON the block stays in the
+    # picture whatever its colour. A strip of grey tape on a blue block used to be cut out of the mask as "not blue",
+    # the model never saw it and the block was judged clean.
+    el = lambda n: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
+    if brick in JAW_HUE_BRICKS:
+        # the jaws have the brick's hue, so blob = block + both jaws: a convex hull would add the background seen
+        # between the jaws. Close gaps up to ~15 mm instead (tape across an edge, a pen mark, a pale face).
+        shape = fill_holes(cv2.morphologyEx(out, cv2.MORPH_CLOSE, el(45)))
+    else:
         cs, _ = cv2.findContours(out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if cs:
-            hull = cv2.fillConvexPoly(np.zeros_like(out), cv2.convexHull(np.vstack(cs)), 255)
-            # inside the hull everything is brick (shadows and grey reflections included) except a red jaw in front of
-            # it and the bright orange plate / table in a corner; then the outline is smoothed (no bites, no spikes)
-            el = lambda n: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
-            jl, jh = BRICK_HUES["red"]; jaw = ((h >= jl) | (h <= jh)) & (hsv[..., 1] >= 150)
-            jaw = cv2.morphologyEx(jaw.astype(np.uint8), cv2.MORPH_CLOSE, el(9))            # the ribbed jaw as one piece
-            plate = ((h >= 3) & (h <= 19) & (hsv[..., 1] >= 190) & (hsv[..., 2] >= 110)).astype(np.uint8)
-            bad = cv2.morphologyEx(jaw | plate, cv2.MORPH_OPEN, el(5))
-            out = np.where((hull > 0) & ((out > 0) | (bad == 0)), 255, 0).astype(np.uint8)
-            out = cv2.morphologyEx(cv2.morphologyEx(out, cv2.MORPH_OPEN, el(11)), cv2.MORPH_CLOSE, el(11))
-            n3, lab3, st3, _ = cv2.connectedComponentsWithStats(out)
-            if n3 > 2: out = (lab3 == 1 + int(np.argmax(st3[1:, cv2.CC_STAT_AREA]))).astype(np.uint8) * 255
-            out = fill_holes(out)
-            big = cv2.GaussianBlur(cv2.resize(out, (W, H), interpolation=cv2.INTER_LINEAR), (0, 0), 5)
-            big = cv2.erode((big >= 128).astype(np.uint8) * 255, el(7))                    # smooth edge, 3 px inside
-            return big, {"z_mm": None, "area_px": int((big > 0).sum()), "search": "colour", "brick": brick}
-    out = cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
-    return cv2.resize(out, (W, H), interpolation=cv2.INTER_NEAREST), {"z_mm": None, "area_px": area * s * s, "search": "colour", "brick": brick}
+        hull = cv2.fillConvexPoly(np.zeros_like(out), cv2.convexHull(np.vstack(cs)), 255)
+        hull = cv2.dilate(hull, el(2 * OUTLINE_MARGIN + 1))
+        # what is NOT the block inside the hull: a red jaw in front of it, the orange plate / table behind a corner.
+        # Both reach beyond the hull. A red or orange patch that lies wholly inside it is something stuck on the block
+        # (tape, a sticker, ink) and is kept.
+        jl, jh = BRICK_HUES["red"]; jaw = ((h >= jl) | (h <= jh)) & (hsv[..., 1] >= 150)
+        jaw = cv2.morphologyEx(jaw.astype(np.uint8), cv2.MORPH_CLOSE, el(9))                # the ribbed jaw as one piece
+        plate = ((h >= 3) & (h <= 19) & (hsv[..., 1] >= 190) & (hsv[..., 2] >= 110)).astype(np.uint8)
+        bad = cv2.morphologyEx(jaw | plate, cv2.MORPH_OPEN, el(5))
+        nb, labb = cv2.connectedComponents(bad); drop = np.zeros_like(bad)
+        for k in np.unique(labb[(hull > 0) & (labb > 0)]):
+            comp = labb == k; inside = int((comp & (hull > 0)).sum()); outside = int(comp.sum()) - inside
+            if outside > max(12, 0.15 * inside): drop |= comp.astype(np.uint8)
+        shape = np.where((hull > 0) & ((out > 0) | (drop == 0)), 255, 0).astype(np.uint8)
+        shape = cv2.morphologyEx(cv2.morphologyEx(shape, cv2.MORPH_OPEN, el(9)), cv2.MORPH_CLOSE, el(11))
+        n3, lab3, st3, _ = cv2.connectedComponentsWithStats(shape)
+        if n3 > 2: shape = (lab3 == 1 + int(np.argmax(st3[1:, cv2.CC_STAT_AREA]))).astype(np.uint8) * 255
+        shape = fill_holes(shape)
+    big = cv2.GaussianBlur(cv2.resize(shape, (W, H), interpolation=cv2.INTER_LINEAR), (0, 0), 5)
+    big = (big >= 128).astype(np.uint8) * 255                                               # smooth edge
+    return big, {"z_mm": None, "area_px": int((big > 0).sum()), "blob_px": area * s * s, "search": "colour", "brick": brick}
 
 
 def apply_mask(img, mask):

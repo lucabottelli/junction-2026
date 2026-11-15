@@ -38,7 +38,7 @@ MAX_FAILS = 3            # failed picks in a row / handlings without a usable ma
 class AutoCollect:
     def __init__(self, S, A, ctx, C, T, F, DATA):
         self.S, self.A, self.ctx, self.C, self.T, self.F, self.DATA = S, A, ctx, C, T, F, DATA
-        self.running = False; self.target = 100; self.cycles = []; self.session = None; self.start_counts = {}; self.rec_session = None; self.per_block = 0; self.since = ""
+        self.running = False; self.target = 100; self.cycles = []; self.session = None; self.start_counts = {}; self.rec_session = None; self.per_block = 0; self.since = ""; self.last_inspect = None
 
     def counts(self):
         d = self.DATA / "front" / "inhand" / "good"
@@ -77,7 +77,7 @@ class AutoCollect:
         except Exception:
             return None
 
-    def photos(self, brick, g_lock, wp1, idx, run_id):
+    def photos(self, brick, g_lock, wp1, idx, run_id, label="good"):
         """WP1 -> WP2, one masked photo per WP2 pose, back up over WP2 and to WP1. -> list of photo records."""
         T, C, F = self.T, self.C, self.F
         import feed
@@ -101,7 +101,7 @@ class AutoCollect:
             T.state = "photo"; T.say(f"cycle {idx}: {brick} photo {i + 1}/{len(wp2)} at {w['name']}")
             F.settle(); T.check()
             prep.configure_inhand(brick=brick)
-            nf = self.ctx.capture(["front"], "good", brick, w["name"], idx, run_id)
+            nf = self.ctx.capture(["front"], label, brick, w["name"], idx, run_id)
             rec = next((m for m in reversed(F._last_meta(3)) if m.get("cam") == "front"), {}) if nf else {}
             dep = rec.get("depth") if isinstance(rec.get("depth"), dict) else {}
             area = dep.get("area_px")
@@ -214,6 +214,54 @@ class AutoCollect:
             except Exception: pass
             T.active = False; A.running = False; C.active = False; self.running = False
 
+    def inspect(self, colour):
+        """One live test of the anomaly model: pick the `colour` block, photograph it at the WP2 poses (saved under
+        front/inhand/test, NOT in the training folders), score every crop with that block's model, put the block back.
+        Verdict: any photo >= t_high -> ANOMALOUS; all <= t_low -> CLEAN; otherwise UNCERTAIN. -> self.last_inspect."""
+        T, C, A = self.T, self.C, self.A
+        self.running = True; self.last_inspect = {"colour": colour, "running": True}
+        T.active = True; A.running = True; C.active = True
+        for e in (T.stop_flag, A.stop, C.stop_flag): e.clear()
+        T.session = datetime.now().strftime("inspect_%Y%m%d_%H%M%S"); d = T.RUNS / T.session; d.mkdir(parents=True, exist_ok=True)
+        T._vdir = d; res = {"colour": colour, "session": T.session}
+        try:
+            model, root = T.scorer.find("front", colour); th = T.scorer.thresholds(root) or {}
+            t_low, t_high = th.get("t_low"), th.get("t_high")
+            if t_low is None or t_high is None: raise RuntimeError(f"no thresholds.json for the {colour} model")
+            home = C.wps("home")[0]["pos"]; wp1 = C.wps("wp1")[0]["pos"]; g_open = T.g_open()
+            T._vopt = {"target": colour, "retries": 1}
+            g_lock = T.pick_vision()
+            brick = ((T.act.attempts or [{}])[-1]).get("brick") or colour
+            ph = self.photos(brick, g_lock, wp1, 1, T.session, label="test")
+            T.state = "judge"; T.say(f"scoring the {brick} photos")
+            for p in ph:
+                if not p["ok"] or not p.get("file"): p["verdict"] = "no usable photo"; continue
+                f = self.DATA / p["file"]; crop = f.with_name(f.stem + "_crop.png")
+                r = T.scorer.score(model, crop, T.cfg["device"]); p["score"] = round(float(r["score"]), 3)
+                p["verdict"] = "anomalous" if p["score"] >= t_high else "clean" if p["score"] <= t_low else "uncertain"
+            sc = [p["score"] for p in ph if "score" in p]
+            verdict = ("NO USABLE PHOTO" if not sc else "ANOMALOUS" if max(sc) >= t_high else
+                       "CLEAN" if len(sc) == len(ph) and max(sc) <= t_low else "UNCERTAIN")
+            res.update(brick=brick, verdict=verdict, t_low=t_low, t_high=t_high, max_score=max(sc) if sc else None, photos=ph)
+            self.last_inspect = {**res, "running": True}
+            for k in range(3):
+                try: res["placed_seen"] = T.place_and_look(1, g_lock, home, g_open, d); break
+                except pol.PickFailed as e:
+                    if k == 2: raise RuntimeError(f"no reachable spot to set the block down: {e}")
+                    C.goto(wp1, gripper=g_lock)
+            T.state = "done"; T.say(f"INSPECT {brick}: {verdict}" + (f" (highest score {max(sc):.2f}; clean <= {t_low}, anomalous >= {t_high})" if sc else ""),
+                                    verdict == "CLEAN")
+        except Stopped:
+            res["error"] = "stopped"; T.state = "stopped"; T.say("STOPPED: arm holds its position", False)
+        except Exception as e:
+            res["error"] = str(e); T.state = "error"; T.say(f"ERROR in inspect: {e} (arm holds its position)", False)
+        finally:
+            try: C.hold_here()
+            except Exception: pass
+            (d / "inspect.json").write_text(json.dumps(res, indent=1))
+            self.last_inspect = {**res, "running": False}
+            T.active = False; A.running = False; C.active = False; self.running = False
+
     def _log(self, d, rec):
         self.cycles.append({k: v for k, v in rec.items() if k != "photos"})
         with open(d / "cycles.jsonl", "a") as f: f.write(json.dumps(rec) + "\n")
@@ -244,6 +292,18 @@ def make_router(S, A, ctx, C, T, F, DATA):
         if miss: return bad(f"camera not live: {', '.join(miss)}")
         threading.Thread(target=AC.run, args=(max(1, min(1000, target)), max(1, min(1000, max_cycles)), bool(record), max(0, min(500, per_block)), since), daemon=True).start()
         time.sleep(0.1); return {**AC.status(), "started": True}
+
+    @r.post("/autocollect/inspect")
+    def inspect(colour: str = "blue"):
+        """Pick that block, photograph it, score it with its anomaly model, put it back. Result: GET /autocollect/inspect."""
+        if colour not in BRICKS: return {"started": False, "msg": f"colour must be one of {BRICKS}"}
+        if AC.busy(): return {"started": False, "msg": "busy: STOP the running job first"}
+        if A.f is None: return {"started": False, "msg": "connect the arm first"}
+        threading.Thread(target=AC.inspect, args=(colour,), daemon=True).start()
+        time.sleep(0.1); return {"started": True}
+
+    @r.get("/autocollect/inspect")
+    def inspect_result(): return AC.last_inspect or {}
 
     @r.post("/autocollect/stop")
     def stop():

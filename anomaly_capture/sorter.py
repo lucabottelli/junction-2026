@@ -628,7 +628,9 @@ class Sorter:
             vp.add_pair(b["c"], rel["xyz"], yaw=rel["yaw"], angle=b["angle"], colour=b["colour"], err_mm=[round(float(e), 1) for e in err])
             with open(d / "places.jsonl", "a") as fh: fh.write(json.dumps({"trial": i, "px": b["c"], **rel, "err_mm": err.tolist()}) + "\n")
             n = sum(1 for _ in open(vp.PAIRS))
-            if n >= 4 and n % 5 == 0 or n == 4:
+            # Auto-refit OFF (2026-11-15 02:50): the placement pairs scatter 5-27 mm against the demo calibration (the brick
+            # shifts when let go), and the fit on 10 of them gave 0.1 mm/px instead of 0.45 and broke every pick after it.
+            if AUTO_REFIT and (n >= 4 and n % 5 == 0 or n == 4):
                 new, txt = vp.refit(cal)
                 if new is not None: self._vis[2] = new
                 self.say(f"calibration {txt}")
@@ -696,6 +698,9 @@ class Sorter:
                 "act": {"loaded": self._pol[1].label if self._pol else None, "trials": self.trials, "live": self.act.live if self.act else {},
                         "last": {k: v for k, v in (self.act_info or {}).items() if k != "attempts"},
                         "roi_warning": self.roi_warning() if self.cfg["pick"] == "act" else None}}
+
+
+AUTO_REFIT = False
 
 
 class VRecorder:

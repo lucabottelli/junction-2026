@@ -258,6 +258,10 @@ SQUARE = 1.28            # long / short side below this: both jaw directions are
 TICKS_SHUT, TICKS_PER_M = 1930.0, 9700.0     # gripper ticks with the jaws shut on nothing; ticks per metre of gap
 MAX_GRASP_W = 0.052
 HOVER = 0.055            # m above the grasp point where the arm lines up before going down
+YAW_BIAS_DEG = -11.5     # FK jaw yaw minus the brick axis in 99 human grasps (median; IQR -17..-6): the model reads the jaws 11.5 deg off
+Z_SEEK = 0.004           # how far below the calibrated grasp height the descent may go looking for the plate (contact stops it)
+EMPTY_TICKS = 25         # fingers stopped fewer ticks than this above the closed end: nothing between them
+HELD_TICKS = 25          # fingers at least this far short of the squeeze command at waypoint 1: still holding
 FINGER = 0.011           # half thickness of a jaw, for the clearance to the neighbours
 # What a grasp tuner may change per pick (grasp_tuner.Tuner.suggest); these values change nothing:
 NEUTRAL = {"dz_mm": 0.0,             # grasp height offset
@@ -297,6 +301,7 @@ def plan_grasps(bricks, calib, kin, q_seed, roll_limits, plate=None):
                     clear = min(clear, min(np.linalg.norm(f - o["c"]) for f in fingers) - math.hypot(o["long"], o["short"]) / 2 - FINGER)
                 if pc is not None: clear = min(clear, min(pr - np.linalg.norm(f - pc) for f in fingers) + 0.02)
                 z = calib.z[0] + calib.z[1] * c[0] + calib.z[2] * c[1]
+                yaw = yaw + math.radians(calib.d.get("yaw_bias_deg", YAW_BIAS_DEG))    # model yaw that really lines the jaws up
                 q, err = kin.ik.solve(np.asarray(q_seed, np.float64)[:5].copy(), np.array([c[0], c[1], z]), yaw, iters=80)
                 _, got, tilt = kin.fk(q)
                 roll = kin.ticks(q, 0)["wrist_roll"]
@@ -384,7 +389,7 @@ class VisionPick:
 
     def _save(self, name, img):
         if self.debug_dir is not None:
-            try: cv2.imwrite(str(self.debug_dir / name), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            try: cv2.imwrite(str(self.debug_dir / f"{time.strftime('%H%M%S')}_{name}"), img, [cv2.IMWRITE_JPEG_QUALITY, 85])   # one set per trial
             except Exception: pass
 
     # ---- one attempt
@@ -437,7 +442,7 @@ class VisionPick:
         info["hover_err_mm"] = [round(v * 1000, 1) for v in (kin.fk(self._q_now())[0] - (p + [0, 0, HOVER]))]
         info["off_ticks"] = {n: round(v) for n, v in off.items()}
         # 2. straight down in steps; stop early if the fingers stand on something (measured height stops following)
-        q = q_hover; n = 5; touched = None; z_low = p[2] - 0.004; steps = []; info["dz_steps_mm"] = steps
+        q = q_hover; n = 5; touched = None; z_low = p[2] - Z_SEEK; steps = []; info["dz_steps_mm"] = steps
         for s in range(1, n + 1):
             z = p[2] + HOVER + (z_low - p[2] - HOVER) * s / n
             q, _ = kin.ik.solve(q, np.array([p[0], p[1], z]), yaw, iters=30)
@@ -461,18 +466,25 @@ class VisionPick:
         self.grasp_pose = dict(A.cmd)
         C.goto(dict(A.cmd), 0.3, gripper=gmin); time.sleep(0.15)
         g_stall = A.pos["gripper"]; info["g_stall"] = round(g_stall)
-        if g_stall - gmin < 120:                                          # shut on nothing
+        # Shut on nothing = the fingers reached the command (reads gmin + ~6). Held = they stopped short of it:
+        # a 2x2 clamped by this pick stalls only ~52 ticks above gmin (1927), so the old "< 120" threw good grasps away.
+        if g_stall - gmin < EMPTY_TICKS:
+            self._snap(f"{tag}shut")
             C.goto(dict(A.cmd), 0.5, gripper=g_open); C.rise(C.wps("wp1")[0]["pos"])
             return "empty", info
         from collect import REGRIP_SQUEEZE
-        g_lock = max(gmin, g_stall - REGRIP_SQUEEZE)
+        g_lock = max(getattr(A, 'g_floor', None) or gmin, g_stall - REGRIP_SQUEEZE)   # may squeeze past the calibrated end
         C.goto(dict(A.cmd), 0.5, gripper=g_lock); time.sleep(0.15)
         self.on_event("grasped", info)
         # 4. up, to waypoint 1, still held?
         wp1t = C.wps("wp1")[0]["pos"]
-        C.rise(wp1t); C.goto(wp1t, gripper=g_lock); time.sleep(0.3)
+        info["g_squeezed"] = round(A.pos["gripper"])
+        C.rise(wp1t); info["g_risen"] = round(A.pos["gripper"]); self._snap(f"{tag}risen")
+        C.goto(wp1t, gripper=g_lock); time.sleep(0.3); info["g_wp1"] = round(A.pos["gripper"])
         info["g_lock"] = round(g_lock)
-        if not C.holding(): return "dropped", info
+        # Held = the fingers still stand short of the squeeze command. An absolute width fails here: a 2x2 reads
+        # 1872-1899 ticks depending on how it sits in the jaws, while empty jaws run on to the command / touch each other.
+        if A.pos["gripper"] - g_lock < HELD_TICKS: return "dropped", info
         self.g_lock = g_lock
         return "held", info
 

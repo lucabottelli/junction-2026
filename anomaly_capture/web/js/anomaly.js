@@ -51,9 +51,9 @@ PAGE.anomaly={
    Polls /feed/status every 500 ms while this page is shown. */
 (()=>{
 let F=null,sig='',imgN=-1,busyBtn=false;
-const NAME={idle:'Not started',moving:'Moving',ready:'Ready · put a block in',closing:'Closing the clamp',to_wp2:'To WP2',photo:'Taking photos',
+const NAME={thin:'Thin grip · confirm',idle:'Not started',moving:'Moving',ready:'Ready · put a block in',closing:'Closing the clamp',to_wp2:'To WP2',photo:'Taking photos',
  returning:'Back to rest',stopped:'Stopped',error:'Error'};
-const CLS={ready:'ok',stopped:'err',error:'err',idle:'line'};
+const CLS={thin:'warn',ready:'ok',stopped:'err',error:'err',idle:'line'};
 const segH=(id,opts,cur,fn)=>setH(id,opts.map(o=>`<button class="${o==cur?'on':''}" ${F&&F.active?'disabled':''} onclick="${fn}('${o}')">${esc(o[0].toUpperCase()+o.slice(1))}</button>`).join(''));
 function render(){
  if(!F)return;const s=JSON.stringify([F.state,F.msg,F.ok,F.cfg,F.active,F.n,F.photos,F.wp2_poses,F.connected,F.busy,F.counts,F.rest_taught]);if(s==sig)return;sig=s;
@@ -68,7 +68,7 @@ function render(){
  setH('an-fphotos',F.photos.length?`<table class=an-ftab><thead><tr><th>Pose</th><th>Depth mask</th><th>Distance</th></tr></thead><tbody>`
   +F.photos.map(p=>`<tr><td class=mono>${esc(p.view)}</td><td>${p.mask_ok?'<span class="badge ok">masked</span>':`<span class="badge err">no mask</span> <span class="muted small">${esc(p.why||'')}</span>`}</td><td class=num>${p.z_mm?p.z_mm+' mm':'–'}</td></tr>`).join('')+'</tbody></table>':'');
  const moving=F.active;
- $('an-fready').disabled=moving||!F.connected;$('an-fclose').disabled=moving||F.state!='ready';$('an-frelease').disabled=moving||!F.connected;
+ $('an-fready').disabled=moving||!F.connected;$('an-fclose').disabled=moving||!(F.state=='ready'||F.state=='thin');$('an-frelease').disabled=moving||!F.connected;
  if(F.has_img&&F.n!=imgN){imgN=F.n;const im=$('an-flast');im.onload=()=>{im.dataset.ok='1'};im.src='/feed/last.jpg?t='+Date.now()}}
 function poll(){if(document.hidden||!CUR||CUR.slug!='anomaly')return;
  fetch('/feed/status').then(r=>r.ok?r.json():null).then(x=>{if(x){F=x;render()}}).catch(()=>{})}

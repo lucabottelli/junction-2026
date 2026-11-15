@@ -367,7 +367,10 @@ def complete_mask(img, mask, s=4, sat_min=185, val_min=80, hue_tol=9, grow_px=12
     return cv2.resize(out, (W, H), interpolation=cv2.INTER_NEAREST)
 
 
-BRICK_HUES = {"pink": (168, 1), "red": (168, 1), "blue": (95, 115), "green": (40, 88)}   # OpenCV hue 0-179, range may wrap
+BRICK_HUES = {"pink": (168, 1), "red": (168, 1), "blue": (95, 115), "green": (22, 88)}   # OpenCV hue 0-179, range may wrap
+# the lime-green 2x4 is hue 23-30 and paler (S 120-200) than pink/blue; the yellow plate is hue 18-20
+BRICK_SAT = {"green": (150, 100)}
+BRICK_HULL = {"green"}                      # box-shaped brick whose hue the jaws don't share: the mask is the blob's convex hull           # per brick: (sat_min, sat_weak) instead of the defaults
 
 
 def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_weak=140):
@@ -377,6 +380,7 @@ def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_wea
     if brick not in BRICK_HUES: return None, f"no colour range for brick '{brick}'"
     H, W = img.shape[:2]; sm = cv2.resize(img, (W // s, H // s), interpolation=cv2.INTER_AREA)
     hsv = cv2.cvtColor(sm, cv2.COLOR_BGR2HSV); h = hsv[..., 0]; lo, hi = BRICK_HUES[brick]
+    sat_min, sat_weak = BRICK_SAT.get(brick, (sat_min, sat_weak))
     inh = ((h >= lo) & (h <= hi)) if lo <= hi else ((h >= lo) | (h <= hi))
     m = (inh & (hsv[..., 1] >= sat_min) & (hsv[..., 2] >= val_min)).astype(np.uint8)
     m = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
@@ -396,6 +400,25 @@ def brick_mask(img, brick, s=4, sat_min=190, val_min=70, min_frac=0.004, sat_wea
     weak = cv2.morphologyEx(weak, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     _, lab2 = cv2.connectedComponents(weak | seed.astype(np.uint8))
     out = fill_holes(np.isin(lab2, np.unique(lab2[seed])).astype(np.uint8) * 255)
+    if brick in BRICK_HULL:                   # glossy hollow underside: grey reflections split the blob -> its convex hull
+        cs, _ = cv2.findContours(out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cs:
+            hull = cv2.fillConvexPoly(np.zeros_like(out), cv2.convexHull(np.vstack(cs)), 255)
+            # inside the hull everything is brick (shadows and grey reflections included) except a red jaw in front of
+            # it and the bright orange plate / table in a corner; then the outline is smoothed (no bites, no spikes)
+            el = lambda n: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
+            jl, jh = BRICK_HUES["red"]; jaw = ((h >= jl) | (h <= jh)) & (hsv[..., 1] >= 150)
+            jaw = cv2.morphologyEx(jaw.astype(np.uint8), cv2.MORPH_CLOSE, el(9))            # the ribbed jaw as one piece
+            plate = ((h >= 3) & (h <= 19) & (hsv[..., 1] >= 190) & (hsv[..., 2] >= 110)).astype(np.uint8)
+            bad = cv2.morphologyEx(jaw | plate, cv2.MORPH_OPEN, el(5))
+            out = np.where((hull > 0) & ((out > 0) | (bad == 0)), 255, 0).astype(np.uint8)
+            out = cv2.morphologyEx(cv2.morphologyEx(out, cv2.MORPH_OPEN, el(11)), cv2.MORPH_CLOSE, el(11))
+            n3, lab3, st3, _ = cv2.connectedComponentsWithStats(out)
+            if n3 > 2: out = (lab3 == 1 + int(np.argmax(st3[1:, cv2.CC_STAT_AREA]))).astype(np.uint8) * 255
+            out = fill_holes(out)
+            big = cv2.GaussianBlur(cv2.resize(out, (W, H), interpolation=cv2.INTER_LINEAR), (0, 0), 5)
+            big = cv2.erode((big >= 128).astype(np.uint8) * 255, el(7))                    # smooth edge, 3 px inside
+            return big, {"z_mm": None, "area_px": int((big > 0).sum()), "search": "colour", "brick": brick}
     out = cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     return cv2.resize(out, (W, H), interpolation=cv2.INTER_NEAREST), {"z_mm": None, "area_px": area * s * s, "search": "colour", "brick": brick}
 

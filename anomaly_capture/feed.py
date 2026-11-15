@@ -14,6 +14,7 @@ STOP (Space / Esc / the top bar) freezes the arm wherever it is, with the block 
 """
 import json, threading, time
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 from fastapi import APIRouter
@@ -31,6 +32,11 @@ SETTLE_S = 0.4                   # wait after arriving at a WP2 pose before the 
 STILL_S, SETTLE_MAX_S = 0.5, 4.0   # the arm counts as still after this long without joint movement; give up after
 THIN_MIN = 8                     # ticks above the empty clamp's stop that count as 'something is held'
 FLOOR_MM = 15.0                  # tilt poses keep the arm at least this far above the table (kinematic model)
+LIFT = Path(__file__).resolve().parent / "feed_lift.json"   # {brick: {wp2 pose name: mm higher}}: see Feeder.lifted
+CFG = Path(__file__).resolve().parent / "feed_cfg.json"     # the selected brick / label / rest pose, kept over a restart
+MIN_AREA = {"pink": 120_000}     # px: a colour mask smaller than this is not that brick. Only pink needs it: the red jaws
+                                 # pass the pink colour test (69k-107k px alone; with a pink block 170k-380k), so a block
+                                 # of another colour under 'pink' still gets a mask (2026-11-15 01:39: a green one did)
 HIGH_MM = 60.0                   # WP2 without a taught 'Above WP2' is allowed if the arm stays this far above the table
 
 
@@ -38,6 +44,12 @@ class Feeder:
     def __init__(self, S, A, ctx, C, DATA, jobs):
         self.S, self.A, self.ctx, self.C, self.DATA, self.jobs = S, A, ctx, C, DATA, jobs
         self.cfg = {"brick": "pink", "label": "good", "rest": "home"}
+        try:                        # 2026-11-15: a restart reset green to pink and a green block was saved as pink
+            j = json.loads(CFG.read_text())
+            if j.get("brick") in BRICKS: self.cfg["brick"] = j["brick"]
+            if j.get("label") in LABELS: self.cfg["label"] = j["label"]
+            if j.get("rest") in RESTS: self.cfg["rest"] = j["rest"]
+        except Exception: pass
         self.state, self.msg, self.ok = "idle", "Press Get ready: the arm goes to the rest pose and opens the clamp", True
         self.run = datetime.now().strftime("%Y%m%d_%H%M%S") + "_feed"
         self.n = 0                  # handlings done this session
@@ -48,6 +60,10 @@ class Feeder:
         self.kin = None             # vpick.Kin, loaded when the tilt poses are made
         self.shut = None            # gripper ticks where the EMPTY clamp stops (measured at the first Get ready)
         self.grip = {}              # last Close clamp: stall / lock / shut / floor ticks
+        self.thin_ok = False        # the user confirmed a thin grip (see close); until the next Get ready
+        try: self.lift = json.loads(LIFT.read_text())
+        except Exception: self.lift = {}
+        self._lifted = {}           # cache: (pose ticks, mm) -> lifted pose ticks
 
     def say(self, m, ok=True): self.msg, self.ok = m, ok
 
@@ -103,6 +119,32 @@ class Feeder:
         A = self.A; g, c = A.pos["gripper"], A.cmd["gripper"]
         if self.shut is None: return self.C.holding()
         return g - self.shut >= THIN_MIN and c < g - 6
+
+    def lifted(self, wp2, brick):
+        """The WP2 photo poses for this brick: the taught ones, each moved straight up by the brick's entry in
+        feed_lift.json (same angle, like /feed/nudge). 2026-11-15: the green 2x3 is longer than the 2x2 the poses
+        were taught with and hangs lower, so the frame's bottom edge cut it in 19/24 photos at wp2-1 and 8/24 at
+        wp2-3. Pink and blue keep the taught poses. Raises if a lifted pose is out of reach."""
+        off = self.lift.get(brick) or {}
+        if not any(off.get(w["name"]) for w in wp2): return wp2
+        import vpick
+        from arm import BODY, JOINTS
+        if self.kin is None: self.kin = vpick.Kin()
+        kin, out = self.kin, []
+        for w in wp2:
+            up = float(off.get(w["name"]) or 0)
+            if not up: out.append(w); continue
+            key = (tuple(sorted(w["pos"].items())), up)
+            if key not in self._lifted:
+                q = kin.rad(w["pos"]); p = kin.fk(q)[0].copy(); p[2] += up / 1000.0
+                t, err = kin.pose_at(w["pos"], p, kin.elevation(q))
+                lim = self.A.fl or kin.cal["follower_limits"]
+                if err >= 0.001 or not all(lim[j][0] + 20 <= t[j] <= lim[j][1] - 20 for j in BODY):
+                    raise RuntimeError(f"{w['name']} can't go {up:.0f} mm higher for {brick} (out of reach, error "
+                                       f"{err * 1000:.0f} mm): lower it with /feed/lift")
+                self._lifted[key] = {**w["pos"], **{j: int(round(t[j])) for j in BODY}}
+            out.append({**w, "pos": self._lifted[key]})
+        return out
 
     def wp2_clearance(self, wp1, wp2):
         """Lowest height (mm above the table, kinematic model) of any arm link on the way rest -> WP1-height pose
@@ -176,6 +218,7 @@ class Feeder:
         def go():
             self.state = "moving"; self.say(f"to the rest pose ({self.cfg['rest']}), opening the clamp")
             self.C.goto(self.rest_pos(), gripper=self.g_open())
+            self.thin_ok = False
             if self.shut is None: self.shut = self._shut_io()
             if self.shut is None:                    # once per clamp range: where do the EMPTY fingers stop?
                 self.say("measuring the empty clamp (keep it empty): closing once, then opening")
@@ -188,9 +231,12 @@ class Feeder:
         return self._start(go, "get ready")
 
     def close(self):
-        if self.state != "ready": return False, "not ready: press Get ready first (the arm must wait at the rest pose, clamp open)"
+        if self.state not in ("ready", "thin"):
+            return False, "not ready: press Get ready first (the arm must wait at the rest pose, clamp open)"
+        confirm = self.state == "thin"      # second press on a thin grip: the user says the block IS in the clamp
         C, A = self.C, self.A
-        wp2 = C.wps("wp2")
+        try: wp2 = self.lifted(C.wps("wp2"), self.cfg["brick"])
+        except Exception as e: return False, str(e)
         wp1 = C.wps("wp1")[0]["pos"]
         if not (self.ctx.R["routines"].get("wp2_above") or {}).get("waypoints"):
             # No taught "Above WP2": fine when WP2 is held high (2026-11-14: front camera raised, block ~17 cm up).
@@ -211,12 +257,18 @@ class Feeder:
             C.goto(dict(A.cmd), 0.5, gripper=g_lock); time.sleep(0.3)
             self.grip = {"stall": round(stall), "lock": round(g_lock), "shut": None if self.shut is None else round(self.shut),
                          "floor": round(floor)}
-            if not self.held():
-                C.goto(dict(A.cmd), 0.4, gripper=self.g_open())
-                self.state = "ready"
-                self.say(f"the clamp closed on nothing (fingers stopped at {stall:.0f}; the empty clamp stops at "
-                         f"{'?' if self.shut is None else round(self.shut)}): put the block between the fingers again, "
-                         "then Close clamp", False)
+            # The fingers are flexible: around a block held across its thin side (a 2x2 on edge) they wrap and close
+            # almost as far as empty (2026-11-14: 1853 with the block, 1849 empty), so the reading can't tell the two
+            # apart. Don't open and drop the block: stay shut and let the user say it is there (once per Get ready).
+            thin = not self.held()
+            self.grip["thin"] = thin
+            if thin and confirm: self.thin_ok = True
+            if thin and not self.thin_ok:
+                self.state = "thin"
+                self.say(f"the fingers closed almost fully (stopped at {stall:.0f}; the empty clamp stops at "
+                         f"{'?' if self.shut is None else round(self.shut)}). Block held on its thin side? Press Close "
+                         "clamp again: the photos go on, and the next thin grips don't ask. Clamp empty? Press Open "
+                         "clamp and put the block in again.", False)
                 return
             self.n = idx                                                  # a new handling (episode id), even if STOPPED later
             self.state = "to_wp2"; self.say("to WP2 (clamp locked)")
@@ -234,10 +286,11 @@ class Feeder:
                 rec = next((m for m in reversed(self._last_meta(3)) if m.get("cam") == "front"), {})
                 dep = rec.get("depth") or {}
                 ph = {"view": w["name"], "file": rec.get("file"), "files": nf, "mask_ok": bool(dep),
-                      "why": rec.get("depth_mask_why"), "z_mm": dep.get("z_mm") if isinstance(dep, dict) else None}
+                      "why": rec.get("depth_mask_why"), "z_mm": dep.get("z_mm") if isinstance(dep, dict) else None,
+                      "area_px": dep.get("area_px") if isinstance(dep, dict) else None}
                 photos.append(ph); self.photos = list(photos)
                 self._grab_last(rec)
-            held = self.held()
+            held = thin or self.held()                # a thin grip can't be told from empty: see the photos
             self.state = "returning"; self.say("back to the rest pose")
             if len(wp2) > 1: C.goto(wp2[0]["pos"], C.cfg["speed"] * 0.4, gripper=g_lock)   # leave the way it came in
             C.up_wp2(wp1, wp2, g_lock)
@@ -246,15 +299,23 @@ class Feeder:
             bad = [p["view"] for p in photos if not p["mask_ok"]]
             note = (f" · NO depth mask at {', '.join(bad)} (kept raw + depth; no crop)" if bad else " · all masked")
             if not held: note += " · the block seemed to slip during the photos: check it"
+            if thin: note += " · thin grip: check the block is in the photos"
+            small = [p["view"] for p in photos if p["mask_ok"] and p.get("area_px") is not None
+                     and p["area_px"] < MIN_AREA.get(brick, 0)]
+            if small:
+                note = (f" · THE MASK DOESN'T LOOK LIKE A {brick.upper()} BLOCK at {', '.join(small)} (too small): "
+                        f"is the brick selector right? These photos are saved as {brick}") + note.replace(" · all masked", "")
             self.state = "ready"
             self.say(f"handling {idx} done: {len(photos)} photo{'s' * (len(photos) != 1)}{note}. "
-                     f"Take the block out, put the next one in, Close clamp", ok=not bad and held)
+                     f"Take the block out, put the next one in, Close clamp", ok=not bad and held and not small)
         return self._start(go, "close clamp")
 
     def release(self):
         """Open the clamp where the arm is (to take a block out after a STOP or an error)."""
         def go():
             self.say("opening the clamp"); self.C.goto(dict(self.A.cmd), 0.4, gripper=self.g_open())
+            if self.state == "thin":
+                self.state = "ready"; self.say("clamp open: put the block between the fingers, then Close clamp"); return
             self.state = "stopped" if self.state in ("stopped", "error") else self.state
             self.say("clamp open. Get ready to go back to the rest pose.")
         return self._start(go, "open clamp")
@@ -279,7 +340,7 @@ class Feeder:
         return {"state": self.state, "msg": self.msg, "ok": self.ok, "active": self.active, "cfg": self.cfg,
                 "run": self.run, "n": self.n, "photos": self.photos, "has_img": self.last_img is not None, "grip": self.grip,
                 "wp2_poses": poses, "rest_taught": rest_ok, "connected": bool(self.A.f), "busy": self.busy(),
-                "counts": self.counts(), "bricks": BRICKS, "labels": LABELS, "rests": RESTS}
+                "lift": self.lift, "counts": self.counts(), "bricks": BRICKS, "labels": LABELS, "rests": RESTS}
 
 
 def make_router(S, A, ctx, C, DATA, jobs):
@@ -302,6 +363,8 @@ def make_router(S, A, ctx, C, DATA, jobs):
             if b in BRICKS: F.cfg["brick"] = b
         if label in LABELS: F.cfg["label"] = label
         if rest in RESTS: F.cfg["rest"] = rest
+        try: CFG.write_text(json.dumps(F.cfg, indent=1))
+        except Exception: pass
         if F.state == "ready" and (brick or label):
             F.say(f"READY: put a {F.cfg['brick']} block ({F.cfg['label']}) in, then Close clamp")
         return F.status()
@@ -407,6 +470,24 @@ def make_router(S, A, ctx, C, DATA, jobs):
         armmod.store_routines(R)
         F.say(f"WP2 pose {pose} ({w[i]['name']}) moved {up_mm:+.0f} mm up, {right_mm:+.0f} mm right, {toward_mm:+.0f} mm out; "
               "same angle. Watch the next handling with a hand on STOP.")
+        return F.status()
+
+    @r.post("/feed/lift")
+    def lift(brick: str, pose: int = 1, up_mm: float = 0.0):
+        """Photograph `brick` with WP2 pose number `pose` held up_mm higher than taught (0 = as taught). Only the
+        hand-feed capture of that brick changes; the taught poses and the other bricks stay as they are."""
+        if F.active or A.running: F.say("can't change WP2 while the arm moves", False); return F.status()
+        try: w = C.wps("wp2")
+        except Exception: w = []
+        i = int(pose) - 1
+        if brick not in BRICKS or not 0 <= i < len(w) or not -40 <= up_mm <= 40:
+            F.say(f"lift: brick one of {BRICKS}, pose 1..{len(w)}, up_mm within ±40", False); return F.status()
+        old = json.loads(json.dumps(F.lift)); F.lift.setdefault(brick, {})[w[i]["name"]] = float(up_mm)
+        try: F.lifted(w, brick)
+        except Exception as e: F.lift = old; F.say(str(e), False); return F.status()
+        LIFT.write_text(json.dumps(F.lift, indent=1))
+        F.say(f"{brick}: {w[i]['name']} is photographed {up_mm:+.0f} mm higher than taught. Watch the next handling "
+              "with a hand on STOP.")
         return F.status()
 
     @r.post("/feed/third")

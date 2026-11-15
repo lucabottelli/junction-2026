@@ -39,7 +39,7 @@ MATCH_DEG = 8.0          # leader must be within this of the follower (every bod
 HOLD_GAP = 20            # ticks: gripper commanded this much more closed than it actually is ... (real SO-101 squeezing a
                          # Duplo brick: 28-37, the leader's closed end limits it; 40 never triggered -> everything needed G)
 HOLD_STILL = 4           # ... and not moving more than this over 0.25 s ...
-HOLD_MIN_OPEN = 50       # ... and not fully shut (ticks above the closed end) = holding something
+HOLD_MIN_OPEN = 15       # ... and not fully shut (ticks above the closed end) = holding something
 HOLD_TIME = 0.3          # s the above must hold
 TAIL_S = 0.4             # keep recording this long after the grasp (the policy must learn to close firmly)
 MAX_PICK_S = 90

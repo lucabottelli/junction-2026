@@ -37,6 +37,10 @@ pyrealsense2, OpenCV, FastAPI). Close Studio's Environment view (the cameras/arm
 
     ~/junction26/anomaly_capture/restart.sh      # then open http://127.0.0.1:7870/
 
+## Team
+Luca Bottelli
+Andrea Cevenini (https://github.com/andreceve)
+
 Station-specific values (arm serials, camera serials, wrist camera device) are constants at the top of
 `capture.py` and `arm.py`.
 
